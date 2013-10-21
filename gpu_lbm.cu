@@ -26,17 +26,25 @@ const double  REYNOLDS_NUMBER = 1E4;    // REYNOLDS_NUMBER = LID_VELOCITY * N / 
 
 // don't change these unless you know what you are doing
 
-const int     Q = 9;                    // number of discrete velocity directions used
+const int     Q = 9;                    // number of discrete velocity aections used
 const double  DENSITY = 2.7;            // fluid density in lattice units
 const double  LID_VELOCITY = 0.05;      // lid velocity in lattice units
 
-// initialize values for direction vectors, density, velocity and distribution functions on the GPU
+// initialize values for aection vectors, density, velocity and distribution functions on the GPU
 
 __global__ void initialize(const int N, const int Q, const double DENSITY, const double LID_VELOCITY, 
                            double *ex, double *ey, double *wt, int *oppos, 
                            double *rho, double *ux, double *uy, double* sigma, 
                            double *f, double *feq, double *f_new)
 {
+    // compute the global "i" and "j" location handled by this thread
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x ;
+    int j = blockIdx.y * blockDim.y + threadIdx.y ;
+
+    // bound checking
+    if( (i > (N-1)) || (j > (N-1)) ) return;
+
     // D2Q9 model base velocities and weights
 
     ex[0] =  0.0;   ey[0] =  0.0;   wt[0] = 4.0 /  9.0;
@@ -49,7 +57,7 @@ __global__ void initialize(const int N, const int Q, const double DENSITY, const
     ex[7] = -1.0;   ey[7] = -1.0;   wt[7] = 1.0 / 36.0;
     ex[8] =  1.0;   ey[8] = -1.0;   wt[8] = 1.0 / 36.0;
 
-    // define opposite (anti) directions (useful for implementing bounce back)
+    // define opposite (anti) aections (useful for implementing bounce back)
 
     oppos[0] = 0;      //      6        2        5
     oppos[1] = 3;      //               ^
@@ -61,52 +69,47 @@ __global__ void initialize(const int N, const int Q, const double DENSITY, const
     oppos[7] = 5;      //               v
     oppos[8] = 6;      //      7        4        8
 
-    // compute the global "i" and "j" location handled by this thread
-
-    int i = blockIdx.x * blockDim.x + threadIdx.x ;
-    int j = blockIdx.y * blockDim.y + threadIdx.y ;
-
     // natural index for location (i,j)
 
-    int ixy = i*N+j;
+    const int index = i*N+j;  // column-ordering
 
     // initialize density and velocity fields inside the cavity
 
-    rho[ixy] = DENSITY;
-    ux[ixy] = 0.0;
-    uy[ixy] = 0.0;
-    sigma[ixy] = 0.0;
+      rho[index] = DENSITY;
+       ux[index] = 0.0;
+       uy[index] = 0.0;
+    sigma[index] = 0.0;
 
     // specify boundary condition for the moving lid
 
-    if((i>0) && (i<N-1) &&(j==0)) ux[ixy] = LID_VELOCITY;
+    if(j==0) ux[index] = LID_VELOCITY;
 
     // assign initial values for distribution functions
-    // along various directions using equilibriu, functions
+    // along various aections using equilibriu, functions
 
-    for(int dir=0;dir<Q;dir++) {
+    for(int a=0;a<Q;a++) {
 
-        int index = i*N*Q + j*Q + dir;
+        int index_f = a + index*Q;
 
-        double edotu = ex[dir]*ux[ixy] + ey[dir]*uy[ixy];
-        double udotu = ux[ixy]*ux[ixy] + uy[ixy]*uy[ixy];
+        double edotu = ex[a]*ux[index] + ey[a]*uy[index];
+        double udotu = ux[index]*ux[index] + uy[index]*uy[index];
 
-        feq[index]   = rho[ixy] * wt[dir] * (1.0 + 3.0*edotu + 4.5*edotu*edotu - 1.5*udotu);
-        f[index]     = feq[index];
-        f_new[index] = feq[index];
+        feq[index_f]   = rho[index] * wt[a] * (1.0 + 3.0*edotu + 4.5*edotu*edotu - 1.5*udotu);
+        f[index_f]     = feq[index_f];
+        f_new[index_f] = feq[index_f];
 
     }
 }
 
-// this function updates the values of the distribution functions at all points along all directions
+// this function updates the values of the distribution functions at all points along all aections
 // carries out one lattice time-step (streaming + collision) in the algorithm
 
 __global__ void collideAndStream( // READ-ONLY parameters (used by this function but not changed)
                                  const int N, const int Q, const double DENSITY, const double LID_VELOCITY, const double REYNOLDS_NUMBER,
-                                 const double *ex,      // x-component of direction vector
-                                 const double *ey,      // x-component of direction vector
-                                 const double *wt,   // weight factor for each direction
-                                 const int *oppos,        // anti (opposite) vector for each direction
+                                 const double *ex,      // x-component of aection vector
+                                 const double *ey,      // x-component of aection vector
+                                 const double *wt,   // weight factor for each aection
+                                 const int *oppos,        // anti (opposite) vector for each aection
 
                                  // READ + WRITE parameters (get updated in this function)
 
@@ -118,96 +121,84 @@ __global__ void collideAndStream( // READ-ONLY parameters (used by this function
                                  double *feq,        // equilibrium distribution function
                                  double *f_new)      // new distribution function
 {
+    // compute the global "i" and "j" location handled by this thread
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x ;
+    int j = blockIdx.y * blockDim.y + threadIdx.y ;
+
+    // bound checking
+    if( (i < 1) || (i > (N-2)) || (j < 1) || (j > (N-2)) ) return;
+
+    // natural index
+    const int index = i*N + j;  // column-major ordering
+
     // calculate fluid viscosity based on the Reynolds number
     double kinematicViscosity = LID_VELOCITY * (double) N / REYNOLDS_NUMBER;
-
 
     // calculate relaxation time tau
     double tau =  0.5 + 3.0 * kinematicViscosity;
 
-    // compute the global "i" and "j" location of this thread
+    // collision
+    for(int a=0;a<Q;a++) {
+        int index_f = a + index*Q;
+        double edotu = ex[a]*ux[index] + ey[a]*uy[index];
+        double udotu = ux[index]*ux[index] + uy[index]*uy[index];
+        feq[index_f] = rho[index] * wt[a] * (1 + 3*edotu + 4.5*edotu*edotu - 1.5*udotu);
+    }
 
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    // streaming from interior node points
 
-    {
-        // collision
-        if((i>0) && (i<N-1) && (j>0) && (j<N-1)) {
-                int ixy = i*N + j;
-                for(int dir=0;dir<Q;dir++) {
-                    int index = i*N*Q + j*Q + dir;
-                    double edotu = ex[dir]*ux[ixy] + ey[dir]*uy[ixy];
-                    double udotu = ux[ixy]*ux[ixy] + uy[ixy]*uy[ixy];
-                    feq[index] = rho[ixy] * wt[dir] * (1 + 3*edotu + 4.5*edotu*edotu - 1.5*udotu);
-                }
+    for(int a=0;a<Q;a++) {
+
+        int index_f = a + index*Q;
+        int index_nbr = (i+ex[a])*N + (j+ey[a]);
+        int index_nbr_f = a + index_nbr * Q;
+        int indexoppos = oppos[a] + index*Q;
+
+        double tau_eff, tau_t, C_Smagorinsky;  // turbulence model parameters
+
+        C_Smagorinsky = 0.16;
+
+        // tau_t = additional contribution to the relaxation time 
+        //         because of the "eddy viscosity" model
+        // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+        // REFERENCE: Krafczyk M., Tolke J. and Luo L.-S. (2003)
+        //            Large-Eddy Simulations with a Multiple-Relaxation-Time LBE Model
+        //            International Journal of Modern Physics B, Vol.17, 33-39
+        // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+        tau_t = 0.5*(pow(pow(tau,2) + 18.0*pow(C_Smagorinsky,2)*sigma[index],0.5) - tau);
+
+        // the effective relaxation time accounts for the additional "eddy viscosity"
+        // effects. Note that tau_eff now varies from point to point in the domain, and is
+        // larger for large strain rates. If the strain rate is zero, tau_eff = 0 and we
+        // revert back to the original (laminar) LBM scheme where tau_eff = tau.
+
+        tau_eff = tau + tau_t;
+
+        // post-collision distribution at (i,j) along "a"
+        double f_plus = f[index_f] - (f[index_f] - feq[index_f])/tau_eff;
+
+        int iS = i + ex[a]; int jS = j + ey[a];
+
+        if((iS==0) || (iS==N-1) || (jS==0) || (jS==N-1)) {
+            // bounce back
+            double ubdote = ux[index_nbr]*ex[a] + uy[index_nbr]*ey[a];
+            f_new[indexoppos] = f_plus - 6.0 * DENSITY * wt[a] * ubdote;
         }
-
-        // streaming from interior node points
-
-        if((i>0) && (i<N-1) && (j>0) && (j<N-1)) {
-                for(int dir=0;dir<Q;dir++) {
-
-                    int index = i*N*Q + j*Q + dir;
-                    int index_new = (i+ex[dir])*N*Q + (j+ey[dir])*Q + dir;
-                    int indexoppos = i*N*Q + j*Q + oppos[dir];
-
-                    double tau_eff, tau_t, C_Smagorinsky;  // turbulence model parameters
-
-                    C_Smagorinsky = 0.16;
-
-                    // tau_t = additional contribution to the relaxation time 
-                    //         because of the "eddy viscosity" model
-                    // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-                    // REFERENCE: Krafczyk M., Tolke J. and Luo L.-S. (2003)
-                    //            Large-Eddy Simulations with a Multiple-Relaxation-Time LBE Model
-                    //            International Journal of Modern Physics B, Vol.17, 33-39
-                    // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-
-                    tau_t = 0.5*(pow(pow(tau,2) + 18.0*pow(C_Smagorinsky,2)*sigma[i*N+j],0.5) - tau);
-
-//                  if((i==250) && (j==1)) printf("tau_t = %f\n",tau_t);
-
-                    // the effective relaxation time accounts for the additional "eddy viscosity"
-                    // effects. Note that tau_eff now varies from point to point in the domain, and is
-                    // larger for large strain rates. If the strain rate is zero, tau_eff = 0 and we
-                    // revert back to the original (laminar) LBM scheme where tau_eff = tau.
-
-                    tau_eff = tau + tau_t;
-
-                    // post-collision distribution at (i,j) along "dir"
-                    double f_plus = f[index] - (f[index] - feq[index])/tau_eff;
-
-//                  if ((i==250) && (j==1)) printf("j = %d dir = %d   f_plus = %f\n",j,dir,f_plus);
-
-                    int iS = i + ex[dir]; int jS = j + ey[dir];
-
-                    if((iS==0) || (iS==N-1) || (jS==0) || (jS==N-1)) {
-                        // bounce back
-                        int ixy_nbr = iS*N + jS;
-                        double ubdote = ux[ixy_nbr]*ex[dir] + uy[ixy_nbr]*ey[dir];
-                        f_new[indexoppos] = f_plus - 6.0 * DENSITY * wt[dir] * ubdote;
-
-//                      if((i==250) && (j+ey[dir]==0)) {
-//                        printf("ubdote = %f  Bounce backed f(%d) = %f\n",ubdote, oppos[dir],f_new[indexoppos]);
-//                      }
-
-
-                    }
-                    else {
-                        // stream to neighbor
-                        f_new[index_new] = f_plus;
-                    }
-                }
+        else {
+            // stream to neighbor
+            f_new[index_nbr_f] = f_plus;
         }
     }
 }
 
 __global__ void everythingElse( // READ-ONLY parameters (used by this function but not changed)
                                  const int N, const int Q, const double DENSITY, const double LID_VELOCITY, const double REYNOLDS_NUMBER,
-                                 const double *ex,      // x-component of direction vector
-                                 const double *ey,      // x-component of direction vector
-                                 const double *wt,   // weight factor for each direction
-                                 const int *oppos,        // anti (opposite) vector for each direction
+                                 const double *ex,      // x-component of aection vector
+                                 const double *ey,      // x-component of aection vector
+                                 const double *wt,   // weight factor for each aection
+                                 const int *oppos,        // anti (opposite) vector for each aection
 
                                  // READ + WRITE parameters (get updated in this function)
 
@@ -224,72 +215,61 @@ __global__ void everythingElse( // READ-ONLY parameters (used by this function b
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
 
-    {
-        // push f_new into f
-        if((i>0) && (i<N-1) && (j>0) && (j<N-1)) {
-                for(int dir=0;dir<Q;dir++) {
-                    int index = i*N*Q + j*Q + dir;
-                    f[index] = f_new[index];
-//                  if ((i==250) && (j==1)) printf("j = %d dir = %d   f_new = %f\n",j,dir,f_new[index]);
-                }
-        }
+    // bound checking
+    if( (i < 1) || (i > (N-2)) || (j < 1) || (j > (N-2)) ) return;
 
-        // update density at interior nodes
-        if((i>0) && (i<N-1) && (j>0) && (j<N-1)) {
-                rho[i*N+j]=0.0;
-                for(int dir=0;dir<Q;dir++) {
-                    int index = i*N*Q + j*Q + dir;
-                    rho[i*N+j] += f_new[index];
-//                  if ((i==250) && (j==1)) printf("f(%d) = %f\n",dir,f_new[index]);
-                }
-        }
+    // natural index
+    const int index = i*N + j;  // column-major ordering
 
-        // update velocity at interior nodes
-        if((i>0) && (i<N-1) && (j>0) && (j<N-1)) {
-                double velx=0.0;
-                double vely=0.0;
-                for(int dir=0;dir<Q;dir++) {
-                    int index = i*N*Q + j*Q + dir;
-                    velx+=f_new[index]*ex[dir];
-                    vely+=f_new[index]*ey[dir];
-                }
-                int ixy = i*N+j;
-                ux[ixy] = velx/rho[ixy] ;
-                uy[ixy] = vely/rho[ixy] ;
-        }
-
-        // update the rate-of-strain field
-        if((i>0) && (i<N-1) && (j>0) && (j<N-1)) {
-            double sum_xx = 0.0, sum_xy = 0.0, sum_xz = 0.0;
-            double sum_yx = 0.0, sum_yy = 0.0, sum_yz = 0.0;
-            double sum_zx = 0.0, sum_zy = 0.0, sum_zz = 0.0;
-            for(int dir=1; dir<Q; dir++)
-            {
-              int index = i*N*Q + j*Q + dir;
-
-              sum_xx = sum_xx + (f_new[index] - feq[index])*ex[dir]*ex[dir];
-              sum_xy = sum_xy + (f_new[index] - feq[index])*ex[dir]*ey[dir];
-              sum_xz = 0.0;
-              sum_yx = sum_xy;
-              sum_yy = sum_yy + (f_new[index] - feq[index])*ey[dir]*ey[dir];
-              sum_yz = 0.0;
-              sum_zx = 0.0;
-              sum_zy = 0.0;
-              sum_zz = 0.0;
-            }
-
-            // evaluate |S| (magnitude of the strain-rate)
-            int i_j    = i*N+j;
-
-            sigma[i_j] = pow(sum_xx,2) + pow(sum_xy,2) + pow(sum_xz,2)
-                        + pow(sum_yx,2) + pow(sum_yy,2) + pow(sum_yz,2)
-                        + pow(sum_zx,2) + pow(sum_zy,2) + pow(sum_zz,2);
-
-            sigma[i_j] = pow(sigma[i_j],0.5);
-
-        }
-
+    // push f_new into f
+    for(int a=0;a<Q;a++) {
+        int index_f = a + index*Q;
+        f[index_f] = f_new[index_f];
     }
+
+    // update density at interior nodes
+    rho[index]=0.0;
+    for(int a=0;a<Q;a++) {
+        int index_f = a + index*Q;
+        rho[index] += f_new[index_f];
+    }
+
+    // update velocity at interior nodes
+    double velx=0.0;
+    double vely=0.0;
+    for(int a=0;a<Q;a++) {
+        int index_f = a + index*Q;
+        velx += f_new[index_f]*ex[a];
+        vely += f_new[index_f]*ey[a];
+    }
+    ux[index] = velx/rho[index];
+    uy[index] = vely/rho[index];
+
+    // update the rate-of-strain field
+    double sum_xx = 0.0, sum_xy = 0.0, sum_xz = 0.0;
+    double sum_yx = 0.0, sum_yy = 0.0, sum_yz = 0.0;
+    double sum_zx = 0.0, sum_zy = 0.0, sum_zz = 0.0;
+    for(int a=1; a<Q; a++)
+    {
+        int index_f = a + index*Q;
+
+        sum_xx = sum_xx + (f_new[index_f] - feq[index_f])*ex[a]*ex[a];
+        sum_xy = sum_xy + (f_new[index_f] - feq[index_f])*ex[a]*ey[a];
+        sum_xz = 0.0;
+        sum_yx = sum_xy;
+        sum_yy = sum_yy + (f_new[index_f] - feq[index_f])*ey[a]*ey[a];
+        sum_yz = 0.0;
+        sum_zx = 0.0;
+        sum_zy = 0.0;
+        sum_zz = 0.0;
+    }
+
+    // evaluate |S| (magnitude of the strain-rate)
+    sigma[index] = pow(sum_xx,2) + pow(sum_xy,2) + pow(sum_xz,2)
+                 + pow(sum_yx,2) + pow(sum_yy,2) + pow(sum_yz,2)
+                 + pow(sum_zx,2) + pow(sum_zy,2) + pow(sum_zz,2);
+
+    sigma[index] = pow(sigma[index],0.5);
 }
 
 int main(int argc, char* argv[])

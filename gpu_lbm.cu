@@ -21,8 +21,8 @@ using namespace af;
 // problem parameters
 
 const int     N = 128;                  // number of node points along X and Y (cavity length in lattice units)
-const int     TIME_STEPS = 1000000;     // number of time steps for which the simulation is run
-const double  REYNOLDS_NUMBER = 1E4;    // REYNOLDS_NUMBER = LID_VELOCITY * N / kinematicViscosity
+const int     TIME_STEPS = 10000;       // number of time steps for which the simulation is run
+const double  REYNOLDS_NUMBER = 1E6;    // REYNOLDS_NUMBER = LID_VELOCITY * N / kinematicViscosity
 
 // don't change these unless you know what you are doing
 
@@ -30,10 +30,51 @@ const int     Q = 9;                    // number of discrete velocity aections 
 const double  DENSITY = 2.7;            // fluid density in lattice units
 const double  LID_VELOCITY = 0.05;      // lid velocity in lattice units
 
+// use constant memory on the GPU for D2Q9 parameters 
+
+__constant__ double ex[Q];
+__constant__ double ey[Q];
+__constant__ int oppos[Q];
+__constant__ double wt[Q];
+
+// populate D3Q19 parameters and copy them to __constant__ memory on the GPU
+
+void D3Q9(double *ex_h, double *ey_h, int *oppos_h, double *wt_h)
+{
+    // D2Q9 model base velocities and weights
+
+    ex_h[0] =  0.0;   ey_h[0] =  0.0;   wt_h[0] = 4.0 /  9.0;
+    ex_h[1] =  1.0;   ey_h[1] =  0.0;   wt_h[1] = 1.0 /  9.0;
+    ex_h[2] =  0.0;   ey_h[2] =  1.0;   wt_h[2] = 1.0 /  9.0;
+    ex_h[3] = -1.0;   ey_h[3] =  0.0;   wt_h[3] = 1.0 /  9.0;
+    ex_h[4] =  0.0;   ey_h[4] = -1.0;   wt_h[4] = 1.0 /  9.0;
+    ex_h[5] =  1.0;   ey_h[5] =  1.0;   wt_h[5] = 1.0 / 36.0;
+    ex_h[6] = -1.0;   ey_h[6] =  1.0;   wt_h[6] = 1.0 / 36.0;
+    ex_h[7] = -1.0;   ey_h[7] = -1.0;   wt_h[7] = 1.0 / 36.0;
+    ex_h[8] =  1.0;   ey_h[8] = -1.0;   wt_h[8] = 1.0 / 36.0;
+
+    // define opposite (anti) aections (useful for implementing bounce back)
+
+    oppos_h[0] = 0;      //      6        2        5
+    oppos_h[1] = 3;      //               ^
+    oppos_h[2] = 4;      //               |
+    oppos_h[3] = 1;      //               |
+    oppos_h[4] = 2;      //      3 <----- 0 -----> 1
+    oppos_h[5] = 7;      //               |
+    oppos_h[6] = 8;      //               |
+    oppos_h[7] = 5;      //               v
+    oppos_h[8] = 6;      //      7        4        8
+
+    // copy to constant (read-only) memory
+    cudaMemcpyToSymbol(ex,    ex_h,    Q * sizeof(double));  // x-component of velocity direction
+    cudaMemcpyToSymbol(ey,    ey_h,    Q * sizeof(double));  // y-component of velocity direction
+    cudaMemcpyToSymbol(oppos, oppos_h, Q * sizeof(int));     // opposite direction for each velocity direction
+    cudaMemcpyToSymbol(wt,    wt_h,    Q * sizeof(double));  // weight factor for velocity direction
+}
+
 // initialize values for aection vectors, density, velocity and distribution functions on the GPU
 
 __global__ void initialize(const int N, const int Q, const double DENSITY, const double LID_VELOCITY, 
-                           double *ex, double *ey, double *wt, int *oppos, 
                            double *rho, double *ux, double *uy, double* sigma, 
                            double *f, double *feq, double *f_new)
 {
@@ -44,30 +85,6 @@ __global__ void initialize(const int N, const int Q, const double DENSITY, const
 
     // bound checking
     if( (i > (N-1)) || (j > (N-1)) ) return;
-
-    // D2Q9 model base velocities and weights
-
-    ex[0] =  0.0;   ey[0] =  0.0;   wt[0] = 4.0 /  9.0;
-    ex[1] =  1.0;   ey[1] =  0.0;   wt[1] = 1.0 /  9.0;
-    ex[2] =  0.0;   ey[2] =  1.0;   wt[2] = 1.0 /  9.0;
-    ex[3] = -1.0;   ey[3] =  0.0;   wt[3] = 1.0 /  9.0;
-    ex[4] =  0.0;   ey[4] = -1.0;   wt[4] = 1.0 /  9.0;
-    ex[5] =  1.0;   ey[5] =  1.0;   wt[5] = 1.0 / 36.0;
-    ex[6] = -1.0;   ey[6] =  1.0;   wt[6] = 1.0 / 36.0;
-    ex[7] = -1.0;   ey[7] = -1.0;   wt[7] = 1.0 / 36.0;
-    ex[8] =  1.0;   ey[8] = -1.0;   wt[8] = 1.0 / 36.0;
-
-    // define opposite (anti) aections (useful for implementing bounce back)
-
-    oppos[0] = 0;      //      6        2        5
-    oppos[1] = 3;      //               ^
-    oppos[2] = 4;      //               |
-    oppos[3] = 1;      //               |
-    oppos[4] = 2;      //      3 <----- 0 -----> 1
-    oppos[5] = 7;      //               |
-    oppos[6] = 8;      //               |
-    oppos[7] = 5;      //               v
-    oppos[8] = 6;      //      7        4        8
 
     // natural index for location (i,j)
 
@@ -104,15 +121,9 @@ __global__ void initialize(const int N, const int Q, const double DENSITY, const
 // this function updates the values of the distribution functions at all points along all aections
 // carries out one lattice time-step (streaming + collision) in the algorithm
 
-__global__ void collideAndStream( // READ-ONLY parameters (used by this function but not changed)
+__global__ void collideAndStream(// READ-ONLY parameters (used by this function but not changed)
                                  const int N, const int Q, const double DENSITY, const double LID_VELOCITY, const double REYNOLDS_NUMBER,
-                                 const double *ex,      // x-component of aection vector
-                                 const double *ey,      // x-component of aection vector
-                                 const double *wt,   // weight factor for each aection
-                                 const int *oppos,        // anti (opposite) vector for each aection
-
                                  // READ + WRITE parameters (get updated in this function)
-
                                  double *rho,         // density
                                  double *ux,         // X-velocity
                                  double *uy,         // Y-velocity
@@ -194,21 +205,15 @@ __global__ void collideAndStream( // READ-ONLY parameters (used by this function
 }
 
 __global__ void everythingElse( // READ-ONLY parameters (used by this function but not changed)
-                                 const int N, const int Q, const double DENSITY, const double LID_VELOCITY, const double REYNOLDS_NUMBER,
-                                 const double *ex,      // x-component of aection vector
-                                 const double *ey,      // x-component of aection vector
-                                 const double *wt,   // weight factor for each aection
-                                 const int *oppos,        // anti (opposite) vector for each aection
-
-                                 // READ + WRITE parameters (get updated in this function)
-
-                                 double *rho,         // density
-                                 double *ux,         // X-velocity
-                                 double *uy,         // Y-velocity
-                                 double *sigma,      // rate-of-strain
-                                 double *f,          // distribution function
-                                 double *feq,        // equilibrium distribution function
-                                 double *f_new)      // new distribution function
+                                const int N, const int Q, const double DENSITY, const double LID_VELOCITY, const double REYNOLDS_NUMBER,
+                                // READ + WRITE parameters (get updated in this function)
+                                double *rho,         // density
+                                double *ux,         // X-velocity
+                                double *uy,         // Y-velocity
+                                double *sigma,      // rate-of-strain
+                                double *f,          // distribution function
+                                double *feq,        // equilibrium distribution function
+                                double *f_new)      // new distribution function
 {
     // compute the global "i" and "j" location of this thread
 
@@ -281,16 +286,6 @@ int main(int argc, char* argv[])
 
         // allocate memory on the GPU
 
-        // the base vectors and associated weight coefficients (GPU)
-        double *ex, *ey, *wt;  // pointers to device (GPU) memory
-        cudaMalloc((void **)&ex,Q*sizeof(double));
-        cudaMalloc((void **)&ey,Q*sizeof(double));
-        cudaMalloc((void **)&wt,Q*sizeof(double));
-
-        // ant vector (GPU)
-        int *oppos;  // gpu memory
-        cudaMalloc((void **)&oppos,Q*sizeof(int));
-
         // distribution functions
         double *f, *feq, *f_new;
         cudaMalloc((void **)&f,N*N*Q*sizeof(double));
@@ -307,6 +302,15 @@ int main(int argc, char* argv[])
         double *sigma;
         cudaMalloc((void **)&sigma,N*N*sizeof(double));
 
+        // allocate space for D3Q9 parameters on the host
+        double *ex_h    = new double[Q];
+        double *ey_h    = new double[Q];
+        int *oppos_h = new int[Q];
+        double *wt_h = new double[Q];
+
+        // fill D3Q9 parameters in constant memory on the GPU
+        D3Q9(ex_h, ey_h, oppos_h, wt_h);
+
         // assign a 2D distribution of CUDA "threads" within each CUDA "block"    
         int threadsAlongX=16, threadsAlongY=16;
         dim3 dimBlock(threadsAlongX, threadsAlongY, 1);
@@ -316,7 +320,6 @@ int main(int argc, char* argv[])
 
         // launch GPU kernel to initialize all fields
         initialize<<<dimGrid,dimBlock>>>(N, Q, DENSITY, LID_VELOCITY,
-                                         ex, ey, wt, oppos,
                                          rho, ux, uy, sigma,
                                          f, feq, f_new);
 
@@ -329,7 +332,6 @@ int main(int argc, char* argv[])
             std::cout << "Time = " << time << std::endl;
 
             collideAndStream<<<dimGrid,dimBlock >>>(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER,
-                                                    ex, ey, wt, oppos,
                                                     rho, ux, uy, sigma,
                                                     f, feq, f_new);
 
@@ -338,7 +340,6 @@ int main(int argc, char* argv[])
             // before moving on to the next set of calculations
 
             everythingElse<<<dimGrid,dimBlock >>>(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER,
-                                                  ex, ey, wt, oppos,
                                                   rho, ux, uy, sigma,
                                                   f, feq, f_new);
 

@@ -30,7 +30,7 @@ const int     Q = 9;                    // number of discrete velocity aections 
 const double  DENSITY = 2.7;            // fluid density in lattice units
 const double  LID_VELOCITY = 0.05;      // lid velocity in lattice units
 
-// use constant memory on the GPU for D2Q9 parameters 
+// D2Q9 parameters 
 
 __constant__ double ex[Q];
 __constant__ double ey[Q];
@@ -80,8 +80,8 @@ __global__ void initialize(const int N, const int Q, const double DENSITY, const
 {
     // compute the global "i" and "j" location handled by this thread
 
-    int i = blockIdx.x * blockDim.x + threadIdx.x ;
-    int j = blockIdx.y * blockDim.y + threadIdx.y ;
+    const int i = blockIdx.x * blockDim.x + threadIdx.x ;
+    const int j = blockIdx.y * blockDim.y + threadIdx.y ;
 
     // bound checking
     if( (i > (N-1)) || (j > (N-1)) ) return;
@@ -134,8 +134,8 @@ __global__ void collideAndStream(// READ-ONLY parameters (used by this function 
 {
     // compute the global "i" and "j" location handled by this thread
 
-    int i = blockIdx.x * blockDim.x + threadIdx.x ;
-    int j = blockIdx.y * blockDim.y + threadIdx.y ;
+    const int i = blockIdx.x * blockDim.x + threadIdx.x ;
+    const int j = blockIdx.y * blockDim.y + threadIdx.y ;
 
     // bound checking
     if( (i < 1) || (i > (N-2)) || (j < 1) || (j > (N-2)) ) return;
@@ -217,8 +217,8 @@ __global__ void everythingElse( // READ-ONLY parameters (used by this function b
 {
     // compute the global "i" and "j" location of this thread
 
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    const int j = blockIdx.y * blockDim.y + threadIdx.y;
 
     // bound checking
     if( (i < 1) || (i > (N-2)) || (j < 1) || (j > (N-2)) ) return;

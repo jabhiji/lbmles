@@ -21,7 +21,7 @@ using namespace af;
 // problem parameters
 
 const int     N = 128;                  // number of node points along X and Y (cavity length in lattice units)
-const int     TIME_STEPS = 1000000;     // number of time steps for which the simulation is run
+const int     TIME_STEPS = 10000;       // number of time steps for which the simulation is run
 const double  REYNOLDS_NUMBER = 1E6;    // REYNOLDS_NUMBER = LID_VELOCITY * N / kinematicViscosity
 
 // don't change these unless you know what you are doing
@@ -29,6 +29,27 @@ const double  REYNOLDS_NUMBER = 1E6;    // REYNOLDS_NUMBER = LID_VELOCITY * N / 
 const int     Q = 9;                    // number of discrete velocity aections used
 const double  DENSITY = 2.7;            // fluid density in lattice units
 const double  LID_VELOCITY = 0.05;      // lid velocity in lattice units
+
+// allocate memory
+
+// distribution functions
+array     f(N, N, Q, f64);
+array   feq(N, N, Q, f64);
+array f_new(N, N, Q, f64);
+
+// density and velocity
+array   rho(N, N, f64);
+array    ux(N, N, f64);
+array    uy(N, N, f64);
+
+// rate-of-strain
+array sigma(N, N, f64);
+
+// D3Q9 parameters
+array    ex(Q, 1, f64);
+array    ey(Q, 1, f64);
+array oppos(Q, 1, u32);
+array    wt(Q, 1, f64);
 
 // D2Q9 parameters 
 
@@ -38,27 +59,27 @@ void D3Q9(array &ex, array &ey, array &oppos, array &wt)
 {
     // D2Q9 model base velocities and weights
 
-    ex(0,1) =  0.0;   ey(0,1) =  0.0;   wt(0,1) = 4.0 /  9.0;
-    ex(1,1) =  1.0;   ey(1,1) =  0.0;   wt(1,1) = 1.0 /  9.0;
-    ex(2,1) =  0.0;   ey(2,1) =  1.0;   wt(2,1) = 1.0 /  9.0;
-    ex(3,1) = -1.0;   ey(3,1) =  0.0;   wt(3,1) = 1.0 /  9.0;
-    ex(4,1) =  0.0;   ey(4,1) = -1.0;   wt(4,1) = 1.0 /  9.0;
-    ex(5,1) =  1.0;   ey(5,1) =  1.0;   wt(5,1) = 1.0 / 36.0;
-    ex(6,1) = -1.0;   ey(6,1) =  1.0;   wt(6,1) = 1.0 / 36.0;
-    ex(7,1) = -1.0;   ey(7,1) = -1.0;   wt(7,1) = 1.0 / 36.0;
-    ex(8,1) =  1.0;   ey(8,1) = -1.0;   wt(8,1) = 1.0 / 36.0;
+    ex(0,0) =  0.0;   ey(0,0) =  0.0;   wt(0,0) = 4.0 /  9.0;
+    ex(1,0) =  1.0;   ey(1,0) =  0.0;   wt(1,0) = 1.0 /  9.0;
+    ex(2,0) =  0.0;   ey(2,0) =  1.0;   wt(2,0) = 1.0 /  9.0;
+    ex(3,0) = -1.0;   ey(3,0) =  0.0;   wt(3,0) = 1.0 /  9.0;
+    ex(4,0) =  0.0;   ey(4,0) = -1.0;   wt(4,0) = 1.0 /  9.0;
+    ex(5,0) =  1.0;   ey(5,0) =  1.0;   wt(5,0) = 1.0 / 36.0;
+    ex(6,0) = -1.0;   ey(6,0) =  1.0;   wt(6,0) = 1.0 / 36.0;
+    ex(7,0) = -1.0;   ey(7,0) = -1.0;   wt(7,0) = 1.0 / 36.0;
+    ex(8,0) =  1.0;   ey(8,0) = -1.0;   wt(8,0) = 1.0 / 36.0;
 
     // define opposite (anti) aections (useful for implementing bounce back)
 
-    oppos(0,1) = 0;      //      6        2        5
-    oppos(1,1) = 3;      //               ^
-    oppos(2,1) = 4;      //               |
-    oppos(3,1) = 1;      //               |
-    oppos(4,1) = 2;      //      3 <----- 0 -----> 1
-    oppos(5,1) = 7;      //               |
-    oppos(6,1) = 8;      //               |
-    oppos(7,1) = 5;      //               v
-    oppos(8,1) = 6;      //      7        4        8
+    oppos(0,0) = 0;      //      6        2        5
+    oppos(1,0) = 3;      //               ^
+    oppos(2,0) = 4;      //               |
+    oppos(3,0) = 1;      //               |
+    oppos(4,0) = 2;      //      3 <----- 0 -----> 1
+    oppos(5,0) = 7;      //               |
+    oppos(6,0) = 8;      //               |
+    oppos(7,0) = 5;      //               v
+    oppos(8,0) = 6;      //      7        4        8
 }
 
 // initialize values for aection vectors, density, velocity and distribution functions on the GPU
@@ -91,7 +112,7 @@ void initialize(const int N, const int Q, const double DENSITY, const double LID
                 array edotu = ex(a,1)*ux(i,j) + ey(a,1)*uy(i,j);
                 array udotu = ux(i,j)*ux(i,j) + uy(i,j)*uy(i,j);
 
-                feq(i,j,a)   = rho(i,j) * wt(a,1) * (1.0 + 3.0*edotu + 4.5*edotu*edotu - 1.5*udotu);
+                feq(i,j,a)   = rho(i,j) * wt(a,0) * (1.0 + 3.0*edotu + 4.5*edotu*edotu - 1.5*udotu);
                 f(i,j,a)     = feq(i,j,a);
                 f_new(i,j,a) = feq(i,j,a);
 
@@ -101,21 +122,21 @@ void initialize(const int N, const int Q, const double DENSITY, const double LID
     }
 }
 
-/*
+
 // this function updates the values of the distribution functions at all points along all directions
 // carries out one lattice time-step (streaming + collision) in the algorithm
-
+/*
 void collideAndStream(// READ-ONLY parameters (used by this function but not changed)
                                  const int N, const int Q, const double DENSITY, const double LID_VELOCITY, const double REYNOLDS_NUMBER,
-                                 const double *ex, const double *ey, const int *oppos, const double *wt,
+                                 const array &ex, const array &ey, const array &oppos, const array &wt,
                                  // READ + WRITE parameters (get updated in this function)
-                                 double *rho,         // density
-                                 double *ux,         // X-velocity
-                                 double *uy,         // Y-velocity
-                                 double *sigma,      // rate-of-strain
-                                 double *f,          // distribution function
-                                 double *feq,        // equilibrium distribution function
-                                 double *f_new)      // new distribution function
+                                 array &rho,        // density
+                                 array &ux,         // X-velocity
+                                 array &uy,         // Y-velocity
+                                 array &sigma,      // rate-of-strain
+                                 array &f,          // distribution function
+                                 array &feq,        // equilibrium distribution function
+                                 array &f_new)      // new distribution function
 {
     // loop over all interior voxels
     for(int i = 1; i < N-1; i++) {
@@ -268,33 +289,12 @@ int main(int argc, char* argv[])
         // check whether to do graphics stuff or not
         bool isconsole = (argc == 2 && argv[1][0] == '-');
 
-        // allocate memory
-
-        // distribution functions
-        array     f(N, N, Q, f64);
-        array   feq(N, N, Q, f64);
-        array f_new(N, N, Q, f64);
-
-        // density and velocity
-        array   rho(N, N, f64);
-        array    ux(N, N, f64);
-        array    uy(N, N, f64);
-
-        // rate-of-strain
-        array sigma(N, N, f64);
-
-        // D3Q9 parameters
-        array    ex(Q, 1, f64);
-        array    ey(Q, 1, f64);
-        array oppos(Q, 1, u32);
-        array    wt(Q, 1, f64);
-
         // fill D3Q9 parameters in constant memory on the GPU
         D3Q9(ex, ey, oppos, wt);
-
+/*
         // launch GPU kernel to initialize all fields
         initialize(N, Q, DENSITY, LID_VELOCITY, ex, ey, oppos, wt, rho, ux, uy, sigma, f, feq, f_new);
-/*
+  
         // time integration
         int time=0;
         while(time<TIME_STEPS) {
@@ -319,9 +319,7 @@ int main(int argc, char* argv[])
 
             if (time % 10 == 0) {
                 if(!isconsole) {
-                    array U(N,N,ux,afHost);
-                    array V(N,N,uy,afHost);
-                    array umag = pow(U*U + V*V, 0.5);
+                    array umag = pow(ux*ux + uy*uy, 0.5);
 
 //                  array dUdx,dUdy,dVdx,dVdy;
 //                  grad(dUdx,dUdy,U);

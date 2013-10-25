@@ -21,7 +21,7 @@ using namespace af;
 // problem parameters
 
 const int     N = 128;                  // number of node points along X and Y (cavity length in lattice units)
-const int     TIME_STEPS = 1000000;     // number of time steps for which the simulation is run
+const int     TIME_STEPS = 10000;       // number of time steps for which the simulation is run
 const double  REYNOLDS_NUMBER = 1E6;    // REYNOLDS_NUMBER = LID_VELOCITY * N / kinematicViscosity
 
 // don't change these unless you know what you are doing
@@ -104,6 +104,7 @@ __global__ void initialize(const int N, const int Q, const double DENSITY, const
     // assign initial values for distribution functions
     // along various aections using equilibriu, functions
 
+    #pragma unroll
     for(int a=0;a<Q;a++) {
 
         int index_f = a + index*Q;
@@ -150,6 +151,7 @@ __global__ void collideAndStream(// READ-ONLY parameters (used by this function 
     double tau =  0.5 + 3.0 * kinematicViscosity;
 
     // collision
+    #pragma unroll
     for(int a=0;a<Q;a++) {
         int index_f = a + index*Q;
         double edotu = ex[a]*ux[index] + ey[a]*uy[index];
@@ -159,6 +161,7 @@ __global__ void collideAndStream(// READ-ONLY parameters (used by this function 
 
     // streaming from interior node points
 
+    #pragma unroll
     for(int a=0;a<Q;a++) {
 
         int index_f = a + index*Q;
@@ -227,6 +230,7 @@ __global__ void everythingElse( // READ-ONLY parameters (used by this function b
     const int index = i*N + j;  // column-major ordering
 
     // push f_new into f
+    #pragma unroll
     for(int a=0;a<Q;a++) {
         int index_f = a + index*Q;
         f[index_f] = f_new[index_f];

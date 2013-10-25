@@ -9,7 +9,7 @@ Last modified on: Thursday, July 18 2013 @12:08 pm
 
 Build instructions: make (uses Makefile present in this folder)
 
-Run instructions: optirun ./gpu_lbm
+Run instructions: ./gpu_lbm
 
 */
 
@@ -32,97 +32,87 @@ const double  LID_VELOCITY = 0.05;      // lid velocity in lattice units
 
 // D2Q9 parameters 
 
-__constant__ double ex[Q];
-__constant__ double ey[Q];
-__constant__ int oppos[Q];
-__constant__ double wt[Q];
-
 // populate D3Q19 parameters and copy them to __constant__ memory on the GPU
 
-void D3Q9(double *ex_h, double *ey_h, int *oppos_h, double *wt_h)
+void D3Q9(double *ex, double *ey, int *oppos, double *wt)
 {
     // D2Q9 model base velocities and weights
 
-    ex_h[0] =  0.0;   ey_h[0] =  0.0;   wt_h[0] = 4.0 /  9.0;
-    ex_h[1] =  1.0;   ey_h[1] =  0.0;   wt_h[1] = 1.0 /  9.0;
-    ex_h[2] =  0.0;   ey_h[2] =  1.0;   wt_h[2] = 1.0 /  9.0;
-    ex_h[3] = -1.0;   ey_h[3] =  0.0;   wt_h[3] = 1.0 /  9.0;
-    ex_h[4] =  0.0;   ey_h[4] = -1.0;   wt_h[4] = 1.0 /  9.0;
-    ex_h[5] =  1.0;   ey_h[5] =  1.0;   wt_h[5] = 1.0 / 36.0;
-    ex_h[6] = -1.0;   ey_h[6] =  1.0;   wt_h[6] = 1.0 / 36.0;
-    ex_h[7] = -1.0;   ey_h[7] = -1.0;   wt_h[7] = 1.0 / 36.0;
-    ex_h[8] =  1.0;   ey_h[8] = -1.0;   wt_h[8] = 1.0 / 36.0;
+    ex[0] =  0.0;   ey[0] =  0.0;   wt[0] = 4.0 /  9.0;
+    ex[1] =  1.0;   ey[1] =  0.0;   wt[1] = 1.0 /  9.0;
+    ex[2] =  0.0;   ey[2] =  1.0;   wt[2] = 1.0 /  9.0;
+    ex[3] = -1.0;   ey[3] =  0.0;   wt[3] = 1.0 /  9.0;
+    ex[4] =  0.0;   ey[4] = -1.0;   wt[4] = 1.0 /  9.0;
+    ex[5] =  1.0;   ey[5] =  1.0;   wt[5] = 1.0 / 36.0;
+    ex[6] = -1.0;   ey[6] =  1.0;   wt[6] = 1.0 / 36.0;
+    ex[7] = -1.0;   ey[7] = -1.0;   wt[7] = 1.0 / 36.0;
+    ex[8] =  1.0;   ey[8] = -1.0;   wt[8] = 1.0 / 36.0;
 
     // define opposite (anti) aections (useful for implementing bounce back)
 
-    oppos_h[0] = 0;      //      6        2        5
-    oppos_h[1] = 3;      //               ^
-    oppos_h[2] = 4;      //               |
-    oppos_h[3] = 1;      //               |
-    oppos_h[4] = 2;      //      3 <----- 0 -----> 1
-    oppos_h[5] = 7;      //               |
-    oppos_h[6] = 8;      //               |
-    oppos_h[7] = 5;      //               v
-    oppos_h[8] = 6;      //      7        4        8
-
-    // copy to constant (read-only) memory
-    cudaMemcpyToSymbol(ex,    ex_h,    Q * sizeof(double));  // x-component of velocity direction
-    cudaMemcpyToSymbol(ey,    ey_h,    Q * sizeof(double));  // y-component of velocity direction
-    cudaMemcpyToSymbol(oppos, oppos_h, Q * sizeof(int));     // opposite direction for each velocity direction
-    cudaMemcpyToSymbol(wt,    wt_h,    Q * sizeof(double));  // weight factor for velocity direction
+    oppos[0] = 0;      //      6        2        5
+    oppos[1] = 3;      //               ^
+    oppos[2] = 4;      //               |
+    oppos[3] = 1;      //               |
+    oppos[4] = 2;      //      3 <----- 0 -----> 1
+    oppos[5] = 7;      //               |
+    oppos[6] = 8;      //               |
+    oppos[7] = 5;      //               v
+    oppos[8] = 6;      //      7        4        8
 }
 
 // initialize values for aection vectors, density, velocity and distribution functions on the GPU
 
-__global__ void initialize(const int N, const int Q, const double DENSITY, const double LID_VELOCITY, 
-                           double *rho, double *ux, double *uy, double* sigma, 
-                           double *f, double *feq, double *f_new)
+void initialize(const int N, const int Q, const double DENSITY, const double LID_VELOCITY, 
+                double *ex, double *ey, int *oppos, double *wt,
+                double *rho, double *ux, double *uy, double* sigma, 
+                double *f, double *feq, double *f_new)
 {
-    // compute the global "i" and "j" location handled by this thread
+    // loop over all voxels
+    for(int i = 0; i < N; i++) {
+        for(int j = 0; j < N; j++) {
 
-    const int i = blockIdx.x * blockDim.x + threadIdx.x ;
-    const int j = blockIdx.y * blockDim.y + threadIdx.y ;
+            // natural index for location (i,j)
 
-    // bound checking
-    if( (i > (N-1)) || (j > (N-1)) ) return;
+            int index = i*N+j;  // column-ordering
 
-    // natural index for location (i,j)
+            // initialize density and velocity fields inside the cavity
 
-    const int index = i*N+j;  // column-ordering
+              rho[index] = DENSITY;   // density
+               ux[index] = 0.0;       // x-component of velocity
+               uy[index] = 0.0;       // x-component of velocity
+            sigma[index] = 0.0;       // rate-of-strain field
 
-    // initialize density and velocity fields inside the cavity
+            // specify boundary condition for the moving lid
 
-      rho[index] = DENSITY;   // density
-       ux[index] = 0.0;       // x-component of velocity
-       uy[index] = 0.0;       // x-component of velocity
-    sigma[index] = 0.0;       // rate-of-strain field
+            if(j==0) ux[index] = LID_VELOCITY;
 
-    // specify boundary condition for the moving lid
+            // assign initial values for distribution functions
+            // along various aections using equilibriu, functions
 
-    if(j==0) ux[index] = LID_VELOCITY;
+            for(int a=0;a<Q;a++) {
+        
+                int index_f = a + index*Q;
 
-    // assign initial values for distribution functions
-    // along various aections using equilibriu, functions
+                double edotu = ex[a]*ux[index] + ey[a]*uy[index];
+                double udotu = ux[index]*ux[index] + uy[index]*uy[index];
 
-    for(int a=0;a<Q;a++) {
+                feq[index_f]   = rho[index] * wt[a] * (1.0 + 3.0*edotu + 4.5*edotu*edotu - 1.5*udotu);
+                f[index_f]     = feq[index_f];
+                f_new[index_f] = feq[index_f];
 
-        int index_f = a + index*Q;
+            }
 
-        double edotu = ex[a]*ux[index] + ey[a]*uy[index];
-        double udotu = ux[index]*ux[index] + uy[index]*uy[index];
-
-        feq[index_f]   = rho[index] * wt[a] * (1.0 + 3.0*edotu + 4.5*edotu*edotu - 1.5*udotu);
-        f[index_f]     = feq[index_f];
-        f_new[index_f] = feq[index_f];
-
+        }
     }
 }
 
 // this function updates the values of the distribution functions at all points along all directions
 // carries out one lattice time-step (streaming + collision) in the algorithm
 
-__global__ void collideAndStream(// READ-ONLY parameters (used by this function but not changed)
+void collideAndStream(// READ-ONLY parameters (used by this function but not changed)
                                  const int N, const int Q, const double DENSITY, const double LID_VELOCITY, const double REYNOLDS_NUMBER,
+                                 const double *ex, const double *ey, const int *oppos, const double *wt,
                                  // READ + WRITE parameters (get updated in this function)
                                  double *rho,         // density
                                  double *ux,         // X-velocity
@@ -132,16 +122,12 @@ __global__ void collideAndStream(// READ-ONLY parameters (used by this function 
                                  double *feq,        // equilibrium distribution function
                                  double *f_new)      // new distribution function
 {
-    // compute the global "i" and "j" location handled by this thread
-
-    const int i = blockIdx.x * blockDim.x + threadIdx.x ;
-    const int j = blockIdx.y * blockDim.y + threadIdx.y ;
-
-    // bound checking
-    if( (i < 1) || (i > (N-2)) || (j < 1) || (j > (N-2)) ) return;
+    // loop over all interior voxels
+    for(int i = 1; i < N-1; i++) {
+        for(int j = 1; j < N-1; j++) {
 
     // natural index
-    const int index = i*N + j;  // column-major ordering
+    int index = i*N + j;  // column-major ordering
 
     // calculate fluid viscosity based on the Reynolds number
     double kinematicViscosity = LID_VELOCITY * (double) N / REYNOLDS_NUMBER;
@@ -202,10 +188,14 @@ __global__ void collideAndStream(// READ-ONLY parameters (used by this function 
             f_new[index_nbr_f] = f_plus;
         }
     }
+
+        } // j
+    }//i
 }
 
-__global__ void everythingElse( // READ-ONLY parameters (used by this function but not changed)
+void everythingElse( // READ-ONLY parameters (used by this function but not changed)
                                 const int N, const int Q, const double DENSITY, const double LID_VELOCITY, const double REYNOLDS_NUMBER,
+                                 const double *ex, const double *ey, const int *oppos, const double *wt,
                                 // READ + WRITE parameters (get updated in this function)
                                 double *rho,         // density
                                 double *ux,         // X-velocity
@@ -215,16 +205,12 @@ __global__ void everythingElse( // READ-ONLY parameters (used by this function b
                                 double *feq,        // equilibrium distribution function
                                 double *f_new)      // new distribution function
 {
-    // compute the global "i" and "j" location of this thread
-
-    const int i = blockIdx.x * blockDim.x + threadIdx.x;
-    const int j = blockIdx.y * blockDim.y + threadIdx.y;
-
-    // bound checking
-    if( (i < 1) || (i > (N-2)) || (j < 1) || (j > (N-2)) ) return;
+    // loop over all interior voxels
+    for(int i = 1; i < N-1; i++) {
+        for(int j = 1; j < N-1; j++) {
 
     // natural index
-    const int index = i*N + j;  // column-major ordering
+    int index = i*N + j;  // column-major ordering
 
     // push f_new into f
     for(int a=0;a<Q;a++) {
@@ -275,6 +261,9 @@ __global__ void everythingElse( // READ-ONLY parameters (used by this function b
                  + pow(sum_zx,2) + pow(sum_zy,2) + pow(sum_zz,2);
 
     sigma[index] = pow(sigma[index],0.5);
+
+        }//j
+    }//i
 }
 
 int main(int argc, char* argv[])
@@ -284,44 +273,32 @@ int main(int argc, char* argv[])
         // check whether to do graphics stuff or not
         bool isconsole = (argc == 2 && argv[1][0] == '-');
 
-        // allocate memory on the GPU
+        // allocate memory
 
         // distribution functions
-        double *f, *feq, *f_new;
-        cudaMalloc((void **)&f,N*N*Q*sizeof(double));
-        cudaMalloc((void **)&feq,N*N*Q*sizeof(double));
-        cudaMalloc((void **)&f_new,N*N*Q*sizeof(double));
+        double *f = new double[N*N*Q];
+        double *feq = new double[N*N*Q];
+        double *f_new = new double[N*N*Q];
 
         // density and velocity
-        double *rho, *ux, *uy;
-        cudaMalloc((void **)&rho,N*N*sizeof(double));
-        cudaMalloc((void **)&ux,N*N*sizeof(double));
-        cudaMalloc((void **)&uy,N*N*sizeof(double));
+        double *rho = new double[N*N];
+        double *ux = new double[N*N];
+        double *uy = new double[N*N];
 
         // rate-of-strain
-        double *sigma;
-        cudaMalloc((void **)&sigma,N*N*sizeof(double));
+        double *sigma = new double[N*N];
 
-        // allocate space for D3Q9 parameters on the host
-        double *ex_h    = new double[Q];
-        double *ey_h    = new double[Q];
-        int *oppos_h = new int[Q];
-        double *wt_h = new double[Q];
+        // D3Q9 parameters
+        double *ex = new double[Q];
+        double *ey = new double[Q];
+        int *oppos = new int[Q];
+        double *wt = new double[Q];
 
         // fill D3Q9 parameters in constant memory on the GPU
-        D3Q9(ex_h, ey_h, oppos_h, wt_h);
-
-        // assign a 2D distribution of CUDA "threads" within each CUDA "block"    
-        int threadsAlongX=16, threadsAlongY=16;
-        dim3 dimBlock(threadsAlongX, threadsAlongY, 1);
-
-        // calculate number of blocks along X and Y in a 2D CUDA "grid"
-        dim3 dimGrid( ceil(float(N)/float(dimBlock.x)), ceil(float(N)/float(dimBlock.y)), 1 );
+        D3Q9(ex, ey, oppos, wt);
 
         // launch GPU kernel to initialize all fields
-        initialize<<<dimGrid,dimBlock>>>(N, Q, DENSITY, LID_VELOCITY,
-                                         rho, ux, uy, sigma,
-                                         f, feq, f_new);
+        initialize(N, Q, DENSITY, LID_VELOCITY, ex, ey, oppos, wt, rho, ux, uy, sigma, f, feq, f_new);
 
         // time integration
         int time=0;
@@ -331,17 +308,13 @@ int main(int argc, char* argv[])
 
             std::cout << "Time = " << time << std::endl;
 
-            collideAndStream<<<dimGrid,dimBlock >>>(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER,
-                                                    rho, ux, uy, sigma,
-                                                    f, feq, f_new);
+            collideAndStream(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER, ex, ey, oppos, wt, rho, ux, uy, sigma, f, feq, f_new);
 
             // collideAndStream and everythingElse were originally one kernel
             // they were separated out to make all threads synchronize globally
             // before moving on to the next set of calculations
 
-            everythingElse<<<dimGrid,dimBlock >>>(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER,
-                                                  rho, ux, uy, sigma,
-                                                  f, feq, f_new);
+            everythingElse(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER, ex, ey, oppos, wt, rho, ux, uy, sigma, f, feq, f_new);
 
             // this is where ArrayFire is currently used
             // the cool thing is you don't need to move the GPU arrays back to the
@@ -351,8 +324,8 @@ int main(int argc, char* argv[])
 
             if (time % 10 == 0) {
                 if(!isconsole) {
-                    array U(N,N,ux,afDevice);
-                    array V(N,N,uy,afDevice);
+                    array U(N,N,ux,afHost);
+                    array V(N,N,uy,afHost);
                     array umag = pow(U*U + V*V, 0.5);
 
 //                  array dUdx,dUdy,dVdx,dVdy;

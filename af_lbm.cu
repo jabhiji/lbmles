@@ -20,9 +20,9 @@ using namespace af;
 
 // problem parameters
 
-const int     N = 128;                  // number of node points along X and Y (cavity length in lattice units)
-const int     TIME_STEPS = 10000;       // number of time steps for which the simulation is run
-const double  REYNOLDS_NUMBER = 1E6;    // REYNOLDS_NUMBER = LID_VELOCITY * N / kinematicViscosity
+const int     N = 8;                  // number of node points along X and Y (cavity length in lattice units)
+const int     TIME_STEPS = 1;         // number of time steps for which the simulation is run
+const double  REYNOLDS_NUMBER = 1E2;  // REYNOLDS_NUMBER = LID_VELOCITY * N / kinematicViscosity
 
 // don't change these unless you know what you are doing
 
@@ -45,90 +45,85 @@ array    uy(N, N, f64);
 // rate-of-strain
 array sigma(N, N, f64);
 
-// D3Q9 parameters
-array    ex(Q, 1, f64);
-array    ey(Q, 1, f64);
-array oppos(Q, 1, u32);
-array    wt(Q, 1, f64);
-
-// D2Q9 parameters 
-
 // populate D3Q19 parameters and copy them to __constant__ memory on the GPU
 
-void D3Q9(array &ex, array &ey, array &oppos, array &wt)
+void D3Q9(double *ex, double *ey, int *oppos, double *wt)
 {
     // D2Q9 model base velocities and weights
 
-    ex(0,0) =  0.0;   ey(0,0) =  0.0;   wt(0,0) = 4.0 /  9.0;
-    ex(1,0) =  1.0;   ey(1,0) =  0.0;   wt(1,0) = 1.0 /  9.0;
-    ex(2,0) =  0.0;   ey(2,0) =  1.0;   wt(2,0) = 1.0 /  9.0;
-    ex(3,0) = -1.0;   ey(3,0) =  0.0;   wt(3,0) = 1.0 /  9.0;
-    ex(4,0) =  0.0;   ey(4,0) = -1.0;   wt(4,0) = 1.0 /  9.0;
-    ex(5,0) =  1.0;   ey(5,0) =  1.0;   wt(5,0) = 1.0 / 36.0;
-    ex(6,0) = -1.0;   ey(6,0) =  1.0;   wt(6,0) = 1.0 / 36.0;
-    ex(7,0) = -1.0;   ey(7,0) = -1.0;   wt(7,0) = 1.0 / 36.0;
-    ex(8,0) =  1.0;   ey(8,0) = -1.0;   wt(8,0) = 1.0 / 36.0;
+    ex[0] =  0.0;   ey[0] =  0.0;   wt[0] = 4.0 /  9.0;
+    ex[1] =  1.0;   ey[1] =  0.0;   wt[1] = 1.0 /  9.0;
+    ex[2] =  0.0;   ey[2] =  1.0;   wt[2] = 1.0 /  9.0;
+    ex[3] = -1.0;   ey[3] =  0.0;   wt[3] = 1.0 /  9.0;
+    ex[4] =  0.0;   ey[4] = -1.0;   wt[4] = 1.0 /  9.0;
+    ex[5] =  1.0;   ey[5] =  1.0;   wt[5] = 1.0 / 36.0;
+    ex[6] = -1.0;   ey[6] =  1.0;   wt[6] = 1.0 / 36.0;
+    ex[7] = -1.0;   ey[7] = -1.0;   wt[7] = 1.0 / 36.0;
+    ex[8] =  1.0;   ey[8] = -1.0;   wt[8] = 1.0 / 36.0;
 
-    // define opposite (anti) aections (useful for implementing bounce back)
+    // define opposite [anti] aections [useful for implementing bounce back]
 
-    oppos(0,0) = 0;      //      6        2        5
-    oppos(1,0) = 3;      //               ^
-    oppos(2,0) = 4;      //               |
-    oppos(3,0) = 1;      //               |
-    oppos(4,0) = 2;      //      3 <----- 0 -----> 1
-    oppos(5,0) = 7;      //               |
-    oppos(6,0) = 8;      //               |
-    oppos(7,0) = 5;      //               v
-    oppos(8,0) = 6;      //      7        4        8
+    oppos[0] = 0;      //      6        2        5
+    oppos[1] = 3;      //               ^
+    oppos[2] = 4;      //               |
+    oppos[3] = 1;      //               |
+    oppos[4] = 2;      //      3 <----- 0 -----> 1
+    oppos[5] = 7;      //               |
+    oppos[6] = 8;      //               |
+    oppos[7] = 5;      //               v
+    oppos[8] = 6;      //      7        4        8
 }
 
-// initialize values for aection vectors, density, velocity and distribution functions on the GPU
+// initialize values for direction vectors, density, velocity and distribution functions on the GPU
 
 void initialize(const int N, const int Q, const double DENSITY, const double LID_VELOCITY, 
-                array &ex, array &ey, array &oppos, array &wt,
+                double *ex_h, double *ey_h, int *op_h, double *wt_h,
                 array &rho, array &ux, array &uy, array &sigma, 
                 array &f, array &feq, array &f_new)
 {
-    // loop over all voxels
-    for(int i = 0; i < N; i++) {
-        for(int j = 0; j < N; j++) {
+    // populate D2Q9 buffers
+    array ex(Q,ex_h,afHost,f64);
+    array ey(Q,ey_h,afHost,f64);
+    array op(Q,op_h,afHost,u32);
+    array wt(Q,wt_h,afHost,f64);
 
-            // initialize density and velocity fields inside the cavity
+    print(wt);
 
-              rho(i,j) = DENSITY;   // density
-               ux(i,j) = 0.0;       // x-component of velocity
-               uy(i,j) = 0.0;       // x-component of velocity
-            sigma(i,j) = 0.0;       // rate-of-strain field
+    // initialize 2D fields
+    rho = constant(DENSITY,N,N,f64);   // density
+    ux = constant(0.0,N,N,f64);        // x-component of velocity
+    uy = constant(0.0,N,N,f64);        // x-component of velocity
+    sigma = constant(0.0,N,N,f64);     // rate-of-strain
 
-            // specify boundary condition for the moving lid
+    ux(0,span) = LID_VELOCITY;  // moving lid on top
 
-            if(j==0) ux(i,0) = LID_VELOCITY;
+    print(rho);
+    print(ux);
+    print(uy);
 
-            // assign initial values for distribution functions
-            // along various aections using equilibriu, functions
-
-            for(int a=0;a<Q;a++) {
-        
-                array edotu = ex(a,1)*ux(i,j) + ey(a,1)*uy(i,j);
-                array udotu = ux(i,j)*ux(i,j) + uy(i,j)*uy(i,j);
-
-                feq(i,j,a)   = rho(i,j) * wt(a,0) * (1.0 + 3.0*edotu + 4.5*edotu*edotu - 1.5*udotu);
-                f(i,j,a)     = feq(i,j,a);
-                f_new(i,j,a) = feq(i,j,a);
-
-            }
-
-        }
+    for(int a=0;a<Q;a++) {
+    for(int j=0;j<N;j++) {
+    for(int i=0;i<N;i++) {
+        array edotu = ux(i,j)*ex(a) + uy(i,j)*ey(a);
+        array udotu = ux(i,j)*ux(i,j) + uy(i,j)*uy(i,j);
+        feq(i,j,a) = rho(i,j) * wt_h[a]; // * (1.0 + 3.0*edotu + 4.5*edotu*edotu - 1.5*udotu); 
     }
+    }
+    }
+  
+    f = feq;
+    f_new = feq;
+
+    print(feq);
 }
 
 
 // this function updates the values of the distribution functions at all points along all directions
 // carries out one lattice time-step (streaming + collision) in the algorithm
-/*
+
 void collideAndStream(// READ-ONLY parameters (used by this function but not changed)
                                  const int N, const int Q, const double DENSITY, const double LID_VELOCITY, const double REYNOLDS_NUMBER,
-                                 const array &ex, const array &ey, const array &oppos, const array &wt,
+                                 const double *ex_h, const double *ey_h, const int *op_h, const double *wt_h,
                                  // READ + WRITE parameters (get updated in this function)
                                  array &rho,        // density
                                  array &ux,         // X-velocity
@@ -138,150 +133,141 @@ void collideAndStream(// READ-ONLY parameters (used by this function but not cha
                                  array &feq,        // equilibrium distribution function
                                  array &f_new)      // new distribution function
 {
-    // loop over all interior voxels
-    for(int i = 1; i < N-1; i++) {
-        for(int j = 1; j < N-1; j++) {
-
-    // natural index
-    int index = i*N + j;  // column-major ordering
+    // populate D2Q9 buffers
+    array ex(Q,ex_h,afHost,f64);
+    array ey(Q,ey_h,afHost,f64);
+    array op(Q,op_h,afHost,u32);
+    array wt(Q,wt_h,afHost,f64);
 
     // calculate fluid viscosity based on the Reynolds number
     double kinematicViscosity = LID_VELOCITY * (double) N / REYNOLDS_NUMBER;
 
     // calculate relaxation time tau
-    double tau =  0.5 + 3.0 * kinematicViscosity;
+    array tau =  constant(0.5 + 3.0 * kinematicViscosity, N, N, f64);
+
+    array edotu(N,N,Q,f64);
+    array udotu(N,N,f64);
 
     // collision
     for(int a=0;a<Q;a++) {
-        int index_f = a + index*Q;
-        double edotu = ex[a]*ux[index] + ey[a]*uy[index];
-        double udotu = ux[index]*ux[index] + uy[index]*uy[index];
-        feq[index_f] = rho[index] * wt[a] * (1 + 3*edotu + 4.5*edotu*edotu - 1.5*udotu);
+        edotu(seq(1,end-1),seq(1,end-1),a) = ex(a)*ux(seq(1,end-1), seq(1,end-1))   + ey(a)*uy(seq(1,end-1), seq(1,end-1));
+        udotu(seq(1,end-1),seq(1,end-1)) = ux(seq(1,end-1), seq(1,end-1))*ux(seq(1,end-1), seq(1,end-1)) + uy(seq(1,end-1), seq(1,end-1))*uy(seq(1,end-1), seq(1,end-1));
+        feq(seq(1,end-1), seq(1,end-1), a) = rho(seq(1,end-1), seq(1,end-1)) * wt(a) * (1 + 3*edotu(seq(1,end-1),seq(1,end-1),a) + 4.5*edotu(seq(1,end-1),seq(1,end-1),a)*edotu(seq(1,end-1),seq(1,end-1),a) - 1.5*udotu(seq(1,end-1),seq(1,end-1)));
     }
 
     // streaming from interior node points
 
+    array tau_t(N,N,f64);
+    array tau_eff(N,N,f64);
+    array f_plus(N,N,Q,f64);
+
+    const double C_Smagorinsky = 0.16;  // turbulence model parameters
+
+    // local relaxation time depends on the rate-of-strain
+    tau_t(seq(1,end-1), seq(1,end-1)) = 0.5*(  pow( pow(tau(seq(1,end-1), seq(1,end-1)),2) 
+                                                 + 18.0*pow(C_Smagorinsky,2)*sigma(seq(1,end-1), seq(1,end-1)),0.5) 
+                                                 - tau(seq(1,end-1), seq(1,end-1)));
+
+    tau_eff = tau + tau_t;
+
     for(int a=0;a<Q;a++) {
 
-        int index_f = a + index*Q;
-        int index_nbr = (i+ex[a])*N + (j+ey[a]);
-        int index_nbr_f = a + index_nbr * Q;
-        int indexoppos = oppos[a] + index*Q;
+        // post-collision distribution at (i,j) along all directions
+        f_plus(seq(1,end-1), seq(1,end-1), a) =    f(seq(1,end-1), seq(1,end-1), a)
+                                              - (  f(seq(1,end-1), seq(1,end-1), a) - 
+                                                 feq(seq(1,end-1), seq(1,end-1), a))
+                                              / tau_eff(seq(1,end-1), seq(1,end-1));
+    }
 
-        double tau_eff, tau_t, C_Smagorinsky;  // turbulence model parameters
+    for(int i = 1; i < N-1; i++) {
+        for(int j = 1; j < N-1; j++) {
+            for(int a = 0; a < Q; a++) {
 
-        C_Smagorinsky = 0.16;
+                int iS = i + ex_h[a]; int jS = j + ey_h[a];
+  
+                if((iS==0) || (iS==N-1) || (jS==0) || (jS==N-1)) {
+                    // bounce back
+                    array ubdote = ux(iS,jS)*ex(a) + uy(iS,jS)*ey(a);
+                    f_new(i,j,op_h[a]) = f_plus(i,j,a) - 6.0 * DENSITY * wt(a) * ubdote;
+                }
+                else {
+                    // stream to neighbor
+                    f_new(iS,jS,a) = f_plus(i,j,a);
+                }
 
-        // tau_t = additional contribution to the relaxation time 
-        //         because of the "eddy viscosity" model
-        // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-        // REFERENCE: Krafczyk M., Tolke J. and Luo L.-S. (2003)
-        //            Large-Eddy Simulations with a Multiple-Relaxation-Time LBE Model
-        //            International Journal of Modern Physics B, Vol.17, 33-39
-        // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-
-        tau_t = 0.5*(pow(pow(tau,2) + 18.0*pow(C_Smagorinsky,2)*sigma[index],0.5) - tau);
-
-        // the effective relaxation time accounts for the additional "eddy viscosity"
-        // effects. Note that tau_eff now varies from point to point in the domain, and is
-        // larger for large strain rates. If the strain rate is zero, tau_eff = 0 and we
-        // revert back to the original (laminar) LBM scheme where tau_eff = tau.
-
-        tau_eff = tau + tau_t;
-
-        // post-collision distribution at (i,j) along "a"
-        double f_plus = f[index_f] - (f[index_f] - feq[index_f])/tau_eff;
-
-        int iS = i + ex[a]; int jS = j + ey[a];
-
-        if((iS==0) || (iS==N-1) || (jS==0) || (jS==N-1)) {
-            // bounce back
-            double ubdote = ux[index_nbr]*ex[a] + uy[index_nbr]*ey[a];
-            f_new[indexoppos] = f_plus - 6.0 * DENSITY * wt[a] * ubdote;
-        }
-        else {
-            // stream to neighbor
-            f_new[index_nbr_f] = f_plus;
+           }
         }
     }
 
-        } // j
-    }//i
 }
+
 
 void everythingElse( // READ-ONLY parameters (used by this function but not changed)
                                 const int N, const int Q, const double DENSITY, const double LID_VELOCITY, const double REYNOLDS_NUMBER,
-                                 const double *ex, const double *ey, const int *oppos, const double *wt,
+                                const double *ex_h, const double *ey_h, const int *op_h, const double *wt_h,
                                 // READ + WRITE parameters (get updated in this function)
-                                double *rho,         // density
-                                double *ux,         // X-velocity
-                                double *uy,         // Y-velocity
-                                double *sigma,      // rate-of-strain
-                                double *f,          // distribution function
-                                double *feq,        // equilibrium distribution function
-                                double *f_new)      // new distribution function
+                                array &rho,         // density
+                                array &ux,         // X-velocity
+                                array &uy,         // Y-velocity
+                                array &sigma,      // rate-of-strain
+                                array &f,          // distribution function
+                                array &feq,        // equilibrium distribution function
+                                array &f_new)      // new distribution function
 {
-    // loop over all interior voxels
-    for(int i = 1; i < N-1; i++) {
-        for(int j = 1; j < N-1; j++) {
-
-    // natural index
-    int index = i*N + j;  // column-major ordering
+    // populate D2Q9 buffers
+    array ex(Q,ex_h,afHost,f64);
+    array ey(Q,ey_h,afHost,f64);
+    array op(Q,op_h,afHost,u32);
+    array wt(Q,wt_h,afHost,f64);
 
     // push f_new into f
-    for(int a=0;a<Q;a++) {
-        int index_f = a + index*Q;
-        f[index_f] = f_new[index_f];
-    }
+    f = f_new;
 
     // update density at interior nodes
-    rho[index]=0.0;
-    for(int a=0;a<Q;a++) {
-        int index_f = a + index*Q;
-        rho[index] += f_new[index_f];
-    }
+    rho = sum(f,2);
 
     // update velocity at interior nodes
-    double velx=0.0;
-    double vely=0.0;
+    array velx=constant(0.0,N,N,f64);
+    array vely=constant(0.0,N,N,f64);
     for(int a=0;a<Q;a++) {
-        int index_f = a + index*Q;
-        velx += f_new[index_f]*ex[a];
-        vely += f_new[index_f]*ey[a];
+        velx(seq(1,end-1), seq(1,end-1)) = velx(seq(1,end-1), seq(1,end-1)) + f_new(seq(1,end-1), seq(1,end-1), a) * ex(a);
+        vely(seq(1,end-1), seq(1,end-1)) = vely(seq(1,end-1), seq(1,end-1)) + f_new(seq(1,end-1), seq(1,end-1), a) * ey(a);
     }
-    ux[index] = velx/rho[index];
-    uy[index] = vely/rho[index];
-
+    ux(seq(1,end-1), seq(1,end-1)) = velx(seq(1,end-1), seq(1,end-1))/rho(seq(1,end-1), seq(1,end-1));
+    uy(seq(1,end-1), seq(1,end-1)) = vely(seq(1,end-1), seq(1,end-1))/rho(seq(1,end-1), seq(1,end-1));
+  
     // update the rate-of-strain field
-    double sum_xx = 0.0, sum_xy = 0.0, sum_xz = 0.0;
-    double sum_yx = 0.0, sum_yy = 0.0, sum_yz = 0.0;
-    double sum_zx = 0.0, sum_zy = 0.0, sum_zz = 0.0;
+    array sum_xx = constant(0.0,N,N,f64); array sum_xy = constant(0.0,N,N,f64); array sum_xz = constant(0.0,N,N,f64);
+    array sum_yx = constant(0.0,N,N,f64); array sum_yy = constant(0.0,N,N,f64); array sum_yz = constant(0.0,N,N,f64);
+    array sum_zx = constant(0.0,N,N,f64); array sum_zy = constant(0.0,N,N,f64); array sum_zz = constant(0.0,N,N,f64);
+  
     for(int a=1; a<Q; a++)
     {
-        int index_f = a + index*Q;
-
-        sum_xx = sum_xx + (f_new[index_f] - feq[index_f])*ex[a]*ex[a];
-        sum_xy = sum_xy + (f_new[index_f] - feq[index_f])*ex[a]*ey[a];
-        sum_xz = 0.0;
-        sum_yx = sum_xy;
-        sum_yy = sum_yy + (f_new[index_f] - feq[index_f])*ey[a]*ey[a];
-        sum_yz = 0.0;
-        sum_zx = 0.0;
-        sum_zy = 0.0;
-        sum_zz = 0.0;
+        sum_xx(seq(1,end-1),seq(1,end-1)) = sum_xx(seq(1,end-1),seq(1,end-1)) + (f_new(seq(1,end-1),seq(1,end-1),a) - feq(seq(1,end-1),seq(1,end-1),a))*ex(a)*ex(a);
+        sum_xy(seq(1,end-1),seq(1,end-1)) = sum_xy(seq(1,end-1),seq(1,end-1)) + (f_new(seq(1,end-1),seq(1,end-1),a) - feq(seq(1,end-1),seq(1,end-1),a))*ex(a)*ey(a);
+        sum_xz(seq(1,end-1),seq(1,end-1)) = 0.0;
+        sum_yx(seq(1,end-1),seq(1,end-1)) = sum_xy(seq(1,end-1),seq(1,end-1));
+        sum_yy(seq(1,end-1),seq(1,end-1)) = sum_yy(seq(1,end-1),seq(1,end-1)) + (f_new(seq(1,end-1),seq(1,end-1),a) - feq(seq(1,end-1),seq(1,end-1),a))*ey(a)*ey(a);
+        sum_yz(seq(1,end-1),seq(1,end-1)) = 0.0;
+        sum_zx(seq(1,end-1),seq(1,end-1)) = 0.0;
+        sum_zy(seq(1,end-1),seq(1,end-1)) = 0.0;
+        sum_zz(seq(1,end-1),seq(1,end-1)) = 0.0;
     }
-
+  
     // evaluate |S| (magnitude of the strain-rate)
-    sigma[index] = pow(sum_xx,2) + pow(sum_xy,2) + pow(sum_xz,2)
-                 + pow(sum_yx,2) + pow(sum_yy,2) + pow(sum_yz,2)
-                 + pow(sum_zx,2) + pow(sum_zy,2) + pow(sum_zz,2);
+    sigma(seq(1,end-1),seq(1,end-1)) = sum_xx(seq(1,end-1),seq(1,end-1)) * sum_xx(seq(1,end-1),seq(1,end-1))
+                                     + sum_xy(seq(1,end-1),seq(1,end-1)) * sum_xy(seq(1,end-1),seq(1,end-1))
+                                     + sum_xz(seq(1,end-1),seq(1,end-1)) * sum_xz(seq(1,end-1),seq(1,end-1))
+                                     + sum_yx(seq(1,end-1),seq(1,end-1)) * sum_yx(seq(1,end-1),seq(1,end-1))
+                                     + sum_yy(seq(1,end-1),seq(1,end-1)) * sum_yy(seq(1,end-1),seq(1,end-1))
+                                     + sum_yz(seq(1,end-1),seq(1,end-1)) * sum_yz(seq(1,end-1),seq(1,end-1))
+                                     + sum_zx(seq(1,end-1),seq(1,end-1)) * sum_zx(seq(1,end-1),seq(1,end-1))
+                                     + sum_zy(seq(1,end-1),seq(1,end-1)) * sum_zy(seq(1,end-1),seq(1,end-1))
+                                     + sum_zz(seq(1,end-1),seq(1,end-1)) * sum_zz(seq(1,end-1),seq(1,end-1));
 
-    sigma[index] = pow(sigma[index],0.5);
-
-        }//j
-    }//i
+    sigma(seq(1,end-1),seq(1,end-1)) = pow(sigma(seq(1,end-1),seq(1,end-1)),0.5);
 }
-*/
+
 int main(int argc, char* argv[])
 {
     try {
@@ -289,12 +275,18 @@ int main(int argc, char* argv[])
         // check whether to do graphics stuff or not
         bool isconsole = (argc == 2 && argv[1][0] == '-');
 
+        // D3Q9 parameters
+        double *ex = new double[Q];
+        double *ey = new double[Q];
+        int    *op = new int[Q];
+        double *wt = new double[Q];
+
         // fill D3Q9 parameters in constant memory on the GPU
-        D3Q9(ex, ey, oppos, wt);
-/*
+        D3Q9(ex, ey, op, wt);
+
         // launch GPU kernel to initialize all fields
-        initialize(N, Q, DENSITY, LID_VELOCITY, ex, ey, oppos, wt, rho, ux, uy, sigma, f, feq, f_new);
-  
+        initialize(N, Q, DENSITY, LID_VELOCITY, ex, ey, op, wt, rho, ux, uy, sigma, f, feq, f_new);
+/*
         // time integration
         int time=0;
         while(time<TIME_STEPS) {
@@ -303,42 +295,23 @@ int main(int argc, char* argv[])
 
             std::cout << "Time = " << time << std::endl;
 
-            collideAndStream(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER, ex, ey, oppos, wt, rho, ux, uy, sigma, f, feq, f_new);
+            collideAndStream(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER, ex, ey, op, wt, rho, ux, uy, sigma, f, feq, f_new);
 
             // collideAndStream and everythingElse were originally one kernel
             // they were separated out to make all threads synchronize globally
             // before moving on to the next set of calculations
 
-            everythingElse(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER, ex, ey, oppos, wt, rho, ux, uy, sigma, f, feq, f_new);
+            everythingElse(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER, ex, ey, op, wt, rho, ux, uy, sigma, f, feq, f_new);
 
-            // this is where ArrayFire is currently used
-            // the cool thing is you don't need to move the GPU arrays back to the
-            // CPU for visualizing them. And of course, we have in-situ graphics
-
-    //      double curl_min = 0, curl_max = 0;
 
             if (time % 10 == 0) {
                 if(!isconsole) {
                     array umag = pow(ux*ux + uy*uy, 0.5);
-
-//                  array dUdx,dUdy,dVdx,dVdy;
-//                  grad(dUdx,dUdy,U);
-//                  grad(dVdx,dVdy,V);
-//                  array curl = dVdx - dUdy;
-
-//                  double2 extrema = minmax<double2>(curl);
-//                  std::cout << "Curl --- min " << extrema.x << "  max " << extrema.y << std::endl;
-
-//                  if (extrema.x < curl_min) curl_min = extrema.x;
-//                  if (extrema.y > curl_max) curl_max = extrema.y;
-
-//                  curl(0) = -0.1;
-//                  curl(N) = +0.1;
                     fig("color","heat");
                     image(umag);
                 }
             }
-    
+  
         }
 */
     } catch (af::exception& e) {

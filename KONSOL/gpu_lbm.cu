@@ -20,7 +20,7 @@ Run instructions: optirun ./gpu_lbm
 // problem parameters
 
 const int     N = 128;                  // number of node points along X and Y (cavity length in lattice units)
-const int     TIME_STEPS = 10000;       // number of time steps for which the simulation is run
+const int     TIME_STEPS = 1000000;     // number of time steps for which the simulation is run
 const double  REYNOLDS_NUMBER = 1E6;    // REYNOLDS_NUMBER = LID_VELOCITY * N / kinematicViscosity
 
 // don't change these unless you know what you are doing
@@ -323,12 +323,12 @@ int main(int argc, char* argv[])
 
         // time integration
         int time=0;
+        clock_t t0, tN;
+	t0 = clock();
         while(time<TIME_STEPS) {
 
             time++;
 
-            clock_t t;
-	    t = clock();
 
             collideAndStream<<<dimGrid,dimBlock >>>(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER,
                                                     rho, ux, uy, sigma,
@@ -341,8 +341,12 @@ int main(int argc, char* argv[])
             everythingElse<<<dimGrid,dimBlock >>>(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER,
                                                   rho, ux, uy, sigma,
                                                   f, feq, f_new);
-            t = clock() - t;
-	    std::cout << "Lattice time " << time << " clock ticks " << t << " lattice time steps per second = " << (float) CLOCKS_PER_SEC / (float) t << std::endl;
+            tN = clock() - t0;
+	    std::cout << "Lattice time " << time 
+                      << " clock ticks " << tN 
+                      << " wall clock time " << tN/CLOCKS_PER_SEC 
+                      << " lattice time steps per second = " << (float) CLOCKS_PER_SEC * time / (float) tN 
+                      << std::endl;
 
         }
 

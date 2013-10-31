@@ -296,12 +296,12 @@ int main(int argc, char* argv[])
 
         // time integration
         int time=0;
+        clock_t t0, tN;
+	t0 = clock();
         while(time<TIME_STEPS) {
 
             time++;     // lattice time
 
-            clock_t t;
-	    t = clock();
 
             collideAndStream(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER, ex, ey, oppos, wt, rho, ux, uy, sigma, f, feq, f_new);
 
@@ -311,8 +311,12 @@ int main(int argc, char* argv[])
 
             everythingElse(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER, ex, ey, oppos, wt, rho, ux, uy, sigma, f, feq, f_new);
 
-            t = clock() - t;
-	    std::cout << "Lattice time " << time << " clock ticks " << t << " lattice time steps per second = " << (float) CLOCKS_PER_SEC / (float) t << std::endl;
+            tN = clock() - t0;
+	    std::cout << "Lattice time " << time 
+                      << " clock ticks " << tN 
+                      << " wall clock time " << tN/CLOCKS_PER_SEC 
+                      << " lattice time steps per second = " << (float) CLOCKS_PER_SEC * time / (float) tN 
+                      << std::endl;
         }
     
     return 0;

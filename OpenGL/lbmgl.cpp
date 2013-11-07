@@ -55,16 +55,29 @@ void showVelocityField(GLFWwindow *window, int WIDTH, int HEIGHT, double xmin, d
     float *umag = new float[WIDTH*HEIGHT];
 
     // fill the 2D array with the velocity magnitude
-    for(int i = 0; i < NX; i++) {
-      for(int j = 0; j < NY; j++) {
+    for(int i = 0; i < NX-1; i++) {
+      for(int j = 0; j < NY-1; j++) {
 
         // map pixel coordinate (i,j) to LBM lattice coordinates (x,y)
-	int x = i*N/NX;
-	int y = j*N/NY;
-	int idx = x*N+y; 
-        
+	int xin = i*N/NX;
+	int yin = j*N/NY;
+
+	// bilinear interpolation
+	int idx00 = (xin  )*N+(yin  );   // point (0,0)
+	int idx10 = (xin+1)*N+(yin  );   // point (1,0)
+	int idx01 = (xin  )*N+(yin+1);   // point (0,1)
+	int idx11 = (xin+1)*N+(yin+1);   // point (1,1)
+
+	float xfl = (float)i * (float)N / (float) NX; 
+	float yfl = (float)j * (float)N / (float) NY; 
+        float x = xfl - (float)xin;
+        float y = yfl - (float)yin;
+
+        float ux_interp = ux[idx00]*(1.0 - x)*(1.0 - y) + ux[idx10] * x * (1.0 - y) + ux[idx01] * (1.0 - x) * y + ux[idx11] * x * y;
+        float uy_interp = uy[idx00]*(1.0 - x)*(1.0 - y) + uy[idx10] * x * (1.0 - y) + uy[idx01] * (1.0 - x) * y + uy[idx11] * x * y;
+
         // calculate velocity magnitude buffer 
-        umag[i*WIDTH + j] = pow((ux[idx]*ux[idx] + uy[idx]*uy[idx]), 0.5);
+        umag[i*WIDTH + j] = pow((ux_interp*ux_interp + uy_interp*uy_interp), 0.5);
       }
     }
     
@@ -73,19 +86,19 @@ void showVelocityField(GLFWwindow *window, int WIDTH, int HEIGHT, double xmin, d
     float dx = (xmax - xmin)/NX;
     float dy = (ymax - ymin)/NY;
 
-    for(int i = 0; i < NX; i++) {
-        for(int j = 0; j < NY; j++) {
+    for(int i = 0; i < NX-1; i++) {
+        for(int j = 0; j < NY-1; j++) {
 
             float x = xmin + i*dx;   // actual x coordinate
             float y = ymin + j*dy;   // actual y coordinate
             float VAL = umag[i*WIDTH + j]/LID_VELOCITY;
 
-            glColor3f(VAL,VAL,VAL);   // black(0,0,0) to white(1,1,1) transition
-//          glColor3f(VAL,1-VAL,0);   // green(0,1,0) to red(1,0,0) transition
+//          glColor3f(VAL,VAL,VAL);   // black(0,0,0) to white(1,1,1) transition
+            glColor3f(VAL,1-VAL,0);   // green(0,1,0) to red(1,0,0) transition
 //          glColor3f(VAL,0,1-VAL);   // blue(0,0,1) to red(1,0,0) transition
 
-glRectf (x,y,x+dx,y+dy);
-      }
+            glRectf (x,y,x+dx,y+dy);
+        }
     }
 
     // swap front and back buffers
@@ -105,50 +118,6 @@ void displaySolution(GLFWwindow *window, int WIDTH, int HEIGHT, const double *ux
     // display the Mandelbrot set in (xmin,ymin)-(xmax,ymax)
     showVelocityField(window, WIDTH, HEIGHT, xmin, xmax, ymin, ymax, ux, uy);
 }
-
-/*
-int displaySolution(const double *ux, const double *uy)
-{
-    //--------------------------------
-    //   Create a WINDOW using GLFW
-    //--------------------------------
-
-    GLFWwindow *window;
-
-    // initialize the library
-    if(!glfwInit())
-        return -1;
-
-    // window size for displaying graphics
-    int WIDTH  = 800;
-    int HEIGHT = 800;
-
-    // set the window's display mode
-    window = glfwCreateWindow(WIDTH, HEIGHT, "Flow inside a square cavity", NULL, NULL);
-    if(!window) 
-    {
-        glfwTerminate();
-	return -1;
-    }
-
-    // make the windows context current
-    glfwMakeContextCurrent(window);
-
-    //---------------------------------------
-    // Loop until the user closes the window
-    //---------------------------------------
-
-    while(!glfwWindowShouldClose(window))
-    {
-        // render function
-        display(window, WIDTH, HEIGHT, ux, uy);
-    }
-
-    glfwDestroyWindow(window);
-    glfwTerminate();
-    return 0;
-}
-*/
 
 // D2Q9 parameters 
 

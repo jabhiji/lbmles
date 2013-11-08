@@ -94,9 +94,25 @@ void showVelocityField(GLFWwindow *window, int WIDTH, int HEIGHT, double xmin, d
             float VAL = umag[i*WIDTH + j]/LID_VELOCITY;
 
 //          glColor3f(VAL,VAL,VAL);   // black(0,0,0) to white(1,1,1) transition
-            glColor3f(VAL,1-VAL,0);   // green(0,1,0) to red(1,0,0) transition
-//          glColor3f(VAL,0,1-VAL);   // blue(0,0,1) to red(1,0,0) transition
+//          glColor3f(VAL,1-VAL,0);   // green(0,1,0) to red(1,0,0) transition
+//          glColor3f(VAL,0.5,1-VAL);   // blue(0,0,1) to red(1,0,0) transition
+            float R, G, B;
 
+        if(VAL<=0.5)
+        {
+            // yellow to blue transition
+            R = 2*VAL;
+            G = 2*VAL;
+            B = 1 - 2*VAL;
+        }
+        else
+        {
+            // red to yellow transition
+            R = 1;
+            G = 2 - 2*VAL;
+            B = 0;
+        }
+            glColor3f(R,G,B);
             glRectf (x,y,x+dx,y+dy);
         }
     }

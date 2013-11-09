@@ -122,6 +122,9 @@ void showVelocityField(GLFWwindow *window, int WIDTH, int HEIGHT, double xmin, d
 
     // poll for and processs events
     glfwPollEvents();
+
+    // free memory
+    delete[] umag;
 }
 
 // Entry point for the display routine

@@ -51,10 +51,14 @@ void showVelocityField(GLFWwindow *window, int WIDTH, int HEIGHT, double xmin, d
     const int NX = WIDTH;
     const int NY = HEIGHT;
 
-    // buffer actually used for plotting velocity magnitude
-    float *umag = new float[WIDTH*HEIGHT];
+    // buffer used to store what we want to plot
+    float *scalar = new float[WIDTH*HEIGHT];
 
-    // fill the 2D array with the velocity magnitude
+    // scale factors
+    float min_curl = -0.01;
+    float max_curl =  0.01;
+
+    // fill the buffer
     for(int i = 0; i < NX-1; i++) {
       for(int j = 0; j < NY-1; j++) {
 
@@ -62,22 +66,42 @@ void showVelocityField(GLFWwindow *window, int WIDTH, int HEIGHT, double xmin, d
 	int xin = i*N/NX;
 	int yin = j*N/NY;
 
-	// bilinear interpolation
+        // get locations of 4 data points inside which this pixel lies
 	int idx00 = (xin  )*N+(yin  );   // point (0,0)
 	int idx10 = (xin+1)*N+(yin  );   // point (1,0)
 	int idx01 = (xin  )*N+(yin+1);   // point (0,1)
 	int idx11 = (xin+1)*N+(yin+1);   // point (1,1)
 
+        // calculate the normalized coordinates of the pixel
 	float xfl = (float)i * (float)N / (float) NX; 
 	float yfl = (float)j * (float)N / (float) NY; 
         float x = xfl - (float)xin;
         float y = yfl - (float)yin;
 
+        // calculate "curl" of the velocity field at the 4 data points
+	float dVdx_00 = uy[idx10] - uy[idx00];  // forward  diff
+	float dVdx_10 = uy[idx10] - uy[idx00];  // backward diff
+	float dVdx_01 = uy[idx11] - uy[idx01];  // forward  diff
+	float dVdx_11 = uy[idx11] - uy[idx01];  // backward diff
+
+        float dUdy_00 = ux[idx01] - ux[idx00];  // forward  diff
+	float dUdy_10 = ux[idx11] - ux[idx10];  // backward diff
+	float dUdy_01 = ux[idx01] - ux[idx00];  // forward  diff
+	float dUdy_11 = ux[idx11] - ux[idx10];  // backward diff
+
+	float curl_z_00 = dVdx_00 - dUdy_00;
+	float curl_z_10 = dVdx_10 - dUdy_10;
+	float curl_z_01 = dVdx_01 - dUdy_01;
+	float curl_z_11 = dVdx_11 - dUdy_11;
+
+	// bilinear interpolation
         float ux_interp = ux[idx00]*(1.0 - x)*(1.0 - y) + ux[idx10] * x * (1.0 - y) + ux[idx01] * (1.0 - x) * y + ux[idx11] * x * y;
         float uy_interp = uy[idx00]*(1.0 - x)*(1.0 - y) + uy[idx10] * x * (1.0 - y) + uy[idx01] * (1.0 - x) * y + uy[idx11] * x * y;
+        float curl_z_in = curl_z_00*(1.0 - x)*(1.0 - y) + curl_z_10 * x * (1.0 - y) + curl_z_01 * (1.0 - x) * y + curl_z_11 * x * y;
 
-        // calculate velocity magnitude buffer 
-        umag[i*WIDTH + j] = pow((ux_interp*ux_interp + uy_interp*uy_interp), 0.5);
+        // this is the value we want to plot at this pixel (should ideally be in the range [0-1])
+//      scalar[i*WIDTH + j] = pow((ux_interp*ux_interp + uy_interp*uy_interp), 0.5) / LID_VELOCITY;
+        scalar[i*WIDTH + j] = (max_curl - curl_z_in) / (max_curl - min_curl);
       }
     }
     
@@ -91,7 +115,7 @@ void showVelocityField(GLFWwindow *window, int WIDTH, int HEIGHT, double xmin, d
 
             float x = xmin + i*dx;   // actual x coordinate
             float y = ymin + j*dy;   // actual y coordinate
-            float VAL = umag[i*WIDTH + j]/LID_VELOCITY;
+            float VAL = scalar[i*WIDTH + j];
 
 //          glColor3f(VAL,VAL,VAL);   // black(0,0,0) to white(1,1,1) transition
 //          glColor3f(VAL,1-VAL,0);   // green(0,1,0) to red(1,0,0) transition
@@ -124,7 +148,7 @@ void showVelocityField(GLFWwindow *window, int WIDTH, int HEIGHT, double xmin, d
     glfwPollEvents();
 
     // free memory
-    delete[] umag;
+    delete[] scalar;
 }
 
 // Entry point for the display routine

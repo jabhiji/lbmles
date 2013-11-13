@@ -55,8 +55,8 @@ void showVelocityField(GLFWwindow *window, int WIDTH, int HEIGHT, double xmin, d
     float *scalar = new float[WIDTH*HEIGHT];
 
     // scale factors
-    float min_curl = -0.01;
-    float max_curl =  0.01;
+    float min_curl = -0.02;
+    float max_curl =  0.02;
 
     // fill the buffer
     for(int i = 0; i < NX-1; i++) {
@@ -72,22 +72,47 @@ void showVelocityField(GLFWwindow *window, int WIDTH, int HEIGHT, double xmin, d
 	int idx01 = (xin  )*N+(yin+1);   // point (0,1)
 	int idx11 = (xin+1)*N+(yin+1);   // point (1,1)
 
+        // additional neighbors for calculating derivatives
+	//
+	//               0p      1p 
+	//               |       |
+	//               |       |
+	//        m1-----01------11----p1
+	//               |       |
+	//               |       |
+	//               |       |
+	//        m0-----00------10----p0
+	//               |       |
+	//               |       |
+	//               0m      1m
+	//
+	//
+	//
+	int idxm0 = (xin > 0)   ? (xin-1)*N+(yin  ) : idx00;
+	int idx0m = (yin > 0)   ? (xin  )*N+(yin-1) : idx00;
+	int idx1m = (yin > 0)   ? (xin+1)*N+(yin-1) : idx10;
+	int idxp0 = (xin < N-1) ? (xin+2)*N+(yin  ) : idx10;
+	int idxp1 = (xin < N-1) ? (xin+2)*N+(yin+1) : idx11;
+	int idx1p = (yin < N-1) ? (xin+1)*N+(yin+2) : idx11;
+	int idx0p = (yin < N-1) ? (xin  )*N+(yin+2) : idx01;
+	int idxm1 = (xin > 0)   ? (xin-1)*N+(yin+1) : idx01;
+
         // calculate the normalized coordinates of the pixel
-	float xfl = (float)i * (float)N / (float) NX; 
-	float yfl = (float)j * (float)N / (float) NY; 
+	float xfl = (float)i * (float)N / (float) NX;
+	float yfl = (float)j * (float)N / (float) NY;
         float x = xfl - (float)xin;
         float y = yfl - (float)yin;
 
         // calculate "curl" of the velocity field at the 4 data points
-	float dVdx_00 = uy[idx10] - uy[idx00];  // forward  diff
-	float dVdx_10 = uy[idx10] - uy[idx00];  // backward diff
-	float dVdx_01 = uy[idx11] - uy[idx01];  // forward  diff
-	float dVdx_11 = uy[idx11] - uy[idx01];  // backward diff
+	float dVdx_00 = uy[idx10] - uy[idxm0];
+	float dVdx_10 = uy[idxp0] - uy[idx00];
+	float dVdx_01 = uy[idx11] - uy[idxm1];
+	float dVdx_11 = uy[idxp1] - uy[idx01];
 
-        float dUdy_00 = ux[idx01] - ux[idx00];  // forward  diff
-	float dUdy_10 = ux[idx11] - ux[idx10];  // backward diff
-	float dUdy_01 = ux[idx01] - ux[idx00];  // forward  diff
-	float dUdy_11 = ux[idx11] - ux[idx10];  // backward diff
+        float dUdy_00 = ux[idx01] - ux[idx0m];
+	float dUdy_10 = ux[idx11] - ux[idx1m];
+	float dUdy_01 = ux[idx0p] - ux[idx00];
+	float dUdy_11 = ux[idx1p] - ux[idx10];
 
 	float curl_z_00 = dVdx_00 - dUdy_00;
 	float curl_z_10 = dVdx_10 - dUdy_10;

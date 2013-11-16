@@ -1,17 +1,16 @@
-/*
+// GLFW header
 
-Simulation of flow inside a 2D square cavity
-using the lattice Boltzmann method (LBM)
+#include <OpenGL/gl.h>
+#include <OpenGL/glu.h>
+#include <GLFW/glfw3.h>
 
-Written by:       Abhijit Joshi (abhijit@accelereyes.com)
+// CUDA - OpenGL interoperability
 
-Last modified on: Thursday, July 18 2013 @12:08 pm
+#define GL_GLEXT_PROTOTYPES
+#include <cuda_runtime.h>
+#include <cuda_gl_interop.h>
 
-Build instructions: make (uses Makefile present in this folder)
-
-Run instructions: optirun ./gpu_lbm
-
-*/
+// the usual gang of C++ headers
 
 #include<iostream>
 #include<stdio.h>
@@ -20,7 +19,7 @@ Run instructions: optirun ./gpu_lbm
 // problem parameters
 
 const int     N = 128;                  // number of node points along X and Y (cavity length in lattice units)
-const int     TIME_STEPS = 1000000;     // number of time steps for which the simulation is run
+const int     TIME_STEPS = 1000;        // number of time steps for which the simulation is run
 const double  REYNOLDS_NUMBER = 1E6;    // REYNOLDS_NUMBER = LID_VELOCITY * N / kinematicViscosity
 
 // don't change these unless you know what you are doing
@@ -320,12 +319,39 @@ int main(int argc, char* argv[])
         initialize<<<dimGrid,dimBlock>>>(N, Q, DENSITY, LID_VELOCITY,
                                          rho, ux, uy, sigma,
                                          f, feq, f_new);
+    //--------------------------------
+    //   Create a WINDOW using GLFW
+    //--------------------------------
 
-        // time integration
+    GLFWwindow *window;
+
+    // initialize the library
+    if(!glfwInit())
+        return -1;
+
+    // window size for displaying graphics
+    int WIDTH  = 400;
+    int HEIGHT = 400;
+
+    // set the window's display mode
+    window = glfwCreateWindow(WIDTH, HEIGHT, "Driven Cavity Flow", NULL, NULL);
+    if(!window) 
+    {
+        glfwTerminate();
+	return -1;
+    }
+
+    // make the windows context current
+    glfwMakeContextCurrent(window);
+
+    //---------------------------------------
+    // Loop until the user closes the window
+    //---------------------------------------
+
         int time=0;
         clock_t t0, tN;
 	t0 = clock();
-        while(time<TIME_STEPS) {
+        while((time<TIME_STEPS) && !glfwWindowShouldClose(window)) {
 
             time++;
 
@@ -350,8 +376,9 @@ int main(int argc, char* argv[])
 
         }
 
-    // added this in for flushing nvprof output to screen
     cudaDeviceReset();
 
+    glfwDestroyWindow(window);
+    glfwTerminate();
     return 0;
 }

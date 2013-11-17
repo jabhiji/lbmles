@@ -1,25 +1,18 @@
 // GLFW header
 
-#include <OpenGL/gl.h>
-#include <OpenGL/glu.h>
 #include <GLFW/glfw3.h>
-
-// CUDA - OpenGL interoperability
-
-#define GL_GLEXT_PROTOTYPES
-#include <cuda_runtime.h>
-#include <cuda_gl_interop.h>
 
 // the usual gang of C++ headers
 
 #include<iostream>
 #include<stdio.h>
+#include<cmath>
 #include<ctime>        // clock_t, clock(), CLOCKS_PER_SEC
 
 // problem parameters
 
 const int     N = 128;                  // number of node points along X and Y (cavity length in lattice units)
-const int     TIME_STEPS = 1000;        // number of time steps for which the simulation is run
+const int     TIME_STEPS = 1000;     // number of time steps for which the simulation is run
 const double  REYNOLDS_NUMBER = 1E6;    // REYNOLDS_NUMBER = LID_VELOCITY * N / kinematicViscosity
 
 // don't change these unless you know what you are doing
@@ -97,7 +90,7 @@ __global__ void initialize(const int N, const int Q, const double DENSITY, const
 
     // specify boundary condition for the moving lid
 
-    if(j==0) ux[index] = LID_VELOCITY;
+    if(j==(N-1)) ux[index] = LID_VELOCITY;
 
     // assign initial values for distribution functions
     // along various aections using equilibriu, functions
@@ -279,46 +272,110 @@ __global__ void everythingElse( // READ-ONLY parameters (used by this function b
     sigma[index] = pow(sigma[index],0.5);
 }
 
+void displaySolution(GLFWwindow *window, int WIDTH, int HEIGHT, const double *ux, const double *uy)
+{
+    // specify initial window size in the X-Y plane
+    double xmin = 0, xmax = N, ymin = 0, ymax = N;
+
+    //--------------------------------
+    //  OpenGL initialization stuff 
+    //--------------------------------
+    glfwGetFramebufferSize(window, &WIDTH, &HEIGHT);
+
+    // select background color to be white
+    // R = 1, G = 1, B = 1, alpha = 0
+    glClearColor (1.0, 1.0, 1.0, 0.0);
+  
+    // initialize viewing values
+    glMatrixMode(GL_PROJECTION);
+  
+    // replace current matrix with the identity matrix
+    glLoadIdentity();
+  
+    // set clipping planes in the X-Y-Z coordinate system
+    glOrtho(xmin,xmax,ymin,ymax, -1.0, 1.0);
+  
+    // clear all pixels
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // create a graphics buffer
+    float *plotThis = new float[WIDTH * HEIGHT];
+
+    // fill the buffer
+    for(int i = 0; i < WIDTH-1; i++) {
+        for(int j = 0; j < HEIGHT-1; j++) {
+
+            // map pixel coordinate (i,j) to LBM lattice coordinates (x,y)
+            int xin = i*N/WIDTH;
+            int yin = j*N/HEIGHT;
+
+            // get locations of 4 data points inside which this pixel lies
+            int idx00 = (xin  )*N+(yin  );   // point (0,0)
+            int idx10 = (xin+1)*N+(yin  );   // point (1,0)
+            int idx01 = (xin  )*N+(yin+1);   // point (0,1)
+            int idx11 = (xin+1)*N+(yin+1);   // point (1,1)
+
+            // calculate the normalized coordinates of the pixel
+            float xfl = (float)i * (float)N / (float) WIDTH;
+            float yfl = (float)j * (float)N / (float) HEIGHT;
+            float x = xfl - (float)xin;
+            float y = yfl - (float)yin;
+
+            // bilinear interpolation
+            double ux_interp = ux[idx00]*(1.0 - x)*(1.0 - y) + ux[idx10] * x * (1.0 - y) + ux[idx01] * (1.0 - x) * y + ux[idx11] * x * y;
+            double uy_interp = uy[idx00]*(1.0 - x)*(1.0 - y) + uy[idx10] * x * (1.0 - y) + uy[idx01] * (1.0 - x) * y + uy[idx11] * x * y;
+
+            double uMag = pow((ux_interp*ux_interp + uy_interp*uy_interp), 0.5);
+
+            plotThis[i*WIDTH+j] = (float)uMag/(float)LID_VELOCITY;
+        }
+    }
+
+    // assign color value based on "plotThis"
+
+    float dx = (xmax - xmin)/WIDTH;
+    float dy = (ymax - ymin)/HEIGHT;
+
+    float R, G, B;  // {RED/GREEN/BLUE} color components
+
+    for(int i = 0; i < WIDTH-1; i++) {
+        for(int j = 0; j < HEIGHT-1; j++) {
+
+            float x = xmin + i*dx;   // actual x coordinate
+            float y = ymin + j*dy;   // actual y coordinate
+            float VAL = plotThis[i*WIDTH + j];
+
+            if(VAL<=0.5)
+            {
+                // yellow to blue transition
+                R = 2*VAL;
+                G = 2*VAL;
+                B = 1 - 2*VAL;
+            }
+            else
+            {
+                // red to yellow transition
+                R = 1;
+                G = 2 - 2*VAL;
+                B = 0;
+            }
+            glColor3f(R,G,B);
+            glRectf (x,y,x+dx,y+dy);
+        }
+    }
+
+    // swap front and back buffers
+    glfwSwapBuffers(window);
+
+    // poll for and processs events
+    glfwPollEvents();
+
+    // free memory
+    delete[] plotThis;
+}
+
 int main(int argc, char* argv[])
 {
-        // allocate memory on the GPU
-
-        // distribution functions
-        double *f, *feq, *f_new;
-        cudaMalloc((void **)&f,N*N*Q*sizeof(double));
-        cudaMalloc((void **)&feq,N*N*Q*sizeof(double));
-        cudaMalloc((void **)&f_new,N*N*Q*sizeof(double));
-
-        // density and velocity
-        double *rho, *ux, *uy;
-        cudaMalloc((void **)&rho,N*N*sizeof(double));
-        cudaMalloc((void **)&ux,N*N*sizeof(double));
-        cudaMalloc((void **)&uy,N*N*sizeof(double));
-
-        // rate-of-strain
-        double *sigma;
-        cudaMalloc((void **)&sigma,N*N*sizeof(double));
-
-        // allocate space for D3Q9 parameters on the host
-        double *ex_h    = new double[Q];
-        double *ey_h    = new double[Q];
-        int *oppos_h = new int[Q];
-        double *wt_h = new double[Q];
-
-        // fill D3Q9 parameters in constant memory on the GPU
-        D3Q9(ex_h, ey_h, oppos_h, wt_h);
-
-        // assign a 2D distribution of CUDA "threads" within each CUDA "block"    
-        int threadsAlongX=16, threadsAlongY=16;
-        dim3 dimBlock(threadsAlongX, threadsAlongY, 1);
-
-        // calculate number of blocks along X and Y in a 2D CUDA "grid"
-        dim3 dimGrid( ceil(float(N)/float(dimBlock.x)), ceil(float(N)/float(dimBlock.y)), 1 );
-
-        // launch GPU kernel to initialize all fields
-        initialize<<<dimGrid,dimBlock>>>(N, Q, DENSITY, LID_VELOCITY,
-                                         rho, ux, uy, sigma,
-                                         f, feq, f_new);
     //--------------------------------
     //   Create a WINDOW using GLFW
     //--------------------------------
@@ -330,8 +387,8 @@ int main(int argc, char* argv[])
         return -1;
 
     // window size for displaying graphics
-    int WIDTH  = 400;
-    int HEIGHT = 400;
+    const int WIDTH  = 800;
+    const int HEIGHT = 800;
 
     // set the window's display mode
     window = glfwCreateWindow(WIDTH, HEIGHT, "Driven Cavity Flow", NULL, NULL);
@@ -344,41 +401,115 @@ int main(int argc, char* argv[])
     // make the windows context current
     glfwMakeContextCurrent(window);
 
-    //---------------------------------------
-    // Loop until the user closes the window
-    //---------------------------------------
+    // -----------------------------------------------
+    // allocate memory on the GPU for LBM calculations
+    // -----------------------------------------------
 
-        int time=0;
-        clock_t t0, tN;
-	t0 = clock();
-        while((time<TIME_STEPS) && !glfwWindowShouldClose(window)) {
+    // distribution functions
+    double *f, *feq, *f_new;
+    cudaMalloc((void **)&f,N*N*Q*sizeof(double));
+    cudaMalloc((void **)&feq,N*N*Q*sizeof(double));
+    cudaMalloc((void **)&f_new,N*N*Q*sizeof(double));
 
-            time++;
+    // density and velocity
+    double *rho, *ux, *uy;
+    cudaMalloc((void **)&rho,N*N*sizeof(double));
+    cudaMalloc((void **)&ux,N*N*sizeof(double));
+    cudaMalloc((void **)&uy,N*N*sizeof(double));
+
+    // rate-of-strain
+    double *sigma;
+    cudaMalloc((void **)&sigma,N*N*sizeof(double));
+
+    // allocate space for D3Q9 parameters on the host
+    double *ex_h = new double[Q];
+    double *ey_h = new double[Q];
+    int *oppos_h = new int[Q];
+    double *wt_h = new double[Q];
+
+    // allocate space on the host for graphics
+    double *ux_h = new double[N*N];
+    double *uy_h = new double[N*N];
+
+    // fill D3Q9 parameters in constant memory on the GPU
+    D3Q9(ex_h, ey_h, oppos_h, wt_h);
+
+    // assign a 2D distribution of CUDA "threads" within each CUDA "block"    
+    int threadsAlongX = 16; 
+    int threadsAlongY = 16;
+
+    dim3 dimBlock(threadsAlongX, threadsAlongY, 1);
+
+    // calculate number of blocks along X and Y in a 2D CUDA "grid"
+    dim3 dimGrid( ceil(float(N)/float(dimBlock.x)), 
+                  ceil(float(N)/float(dimBlock.y)), 
+                  1 );
+
+    // launch GPU kernel to initialize all fields
+    initialize<<<dimGrid,dimBlock>>>(N, Q, DENSITY, LID_VELOCITY,
+                                     rho, ux, uy, sigma,
+                                     f, feq, f_new);
+
+    int time=0;
+    clock_t t0, tN;
+    t0 = clock();
+    while(time<TIME_STEPS)
+    {
+        time++;
 
 
-            collideAndStream<<<dimGrid,dimBlock >>>(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER,
-                                                    rho, ux, uy, sigma,
-                                                    f, feq, f_new);
+        collideAndStream<<<dimGrid,dimBlock >>>(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER,
+                                                rho, ux, uy, sigma,
+                                                f, feq, f_new);
 
-            // collideAndStream and everythingElse were originally one kernel
-            // they were separated out to make all threads synchronize globally
-            // before moving on to the next set of calculations
+        // collideAndStream and everythingElse were originally one kernel
+        // they were separated out to make all threads synchronize globally
+        // before moving on to the next set of calculations
 
-            everythingElse<<<dimGrid,dimBlock >>>(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER,
-                                                  rho, ux, uy, sigma,
-                                                  f, feq, f_new);
-            tN = clock() - t0;
-	    std::cout << "Lattice time " << time 
-                      << " clock ticks " << tN 
-                      << " wall clock time " << tN/CLOCKS_PER_SEC 
-                      << " lattice time steps per second = " << (float) CLOCKS_PER_SEC * time / (float) tN 
-                      << std::endl;
-
+        everythingElse<<<dimGrid,dimBlock >>>(N, Q, DENSITY, LID_VELOCITY, REYNOLDS_NUMBER,
+                                              rho, ux, uy, sigma,
+                                              f, feq, f_new);
+        // ------------------
+        // real-time graphics
+        // ------------------
+        if(time%100 == 0) {
+	    cudaMemcpy(ux_h, ux, N*N*sizeof(double), cudaMemcpyDeviceToHost);
+	    cudaMemcpy(uy_h, uy, N*N*sizeof(double), cudaMemcpyDeviceToHost);
+            displaySolution(window, WIDTH, HEIGHT, ux_h, uy_h);
         }
 
-    cudaDeviceReset();
+        // ------
+        // timing
+        // ------
+        tN = clock() - t0;
+        std::cout << "Lattice time " << time 
+                  << " clock ticks " << tN 
+                  << " wall clock time " << tN/CLOCKS_PER_SEC 
+                  << " lattice time steps per second = " << (float) CLOCKS_PER_SEC * time / (float) tN 
+                  << std::endl;
 
+    } // end time loop
+
+    // free memory on the host
+    delete [] ux_h;
+    delete [] uy_h;
+
+    // free memory on the device
+    cudaFree(rho);
+    cudaFree(ux);
+    cudaFree(uy);
+    cudaFree(f);
+    cudaFree(feq);
+    cudaFree(f_new);
+    cudaFree(sigma);
+
+    // clean up GLFW
     glfwDestroyWindow(window);
     glfwTerminate();
+
+    // reset device (flushes data for nvprof)
+    cudaDeviceReset();
+
+    // main program ends successfully
     return 0;
 }

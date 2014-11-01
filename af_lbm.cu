@@ -9,7 +9,7 @@ Last modified on: Thursday, July 18 2013 @12:08 pm
 
 Build instructions: make (uses Makefile present in this folder)
 
-Run instructions: ./gpu_lbm
+Run instructions: ./gpu_lbm //slower than cpu_version
 
 */
 
